@@ -1,0 +1,53 @@
+@startuml OSM Tiles Flow
+!theme plain
+
+title OpenStreetMap to Grid Tiles Flow
+
+participant "User Input" as UI
+participant "Configuration" as Config
+participant "OSM Downloader" as Download
+participant "OSM Parser" as Parser
+participant "Grid Generator" as Grid
+participant "Bevy Renderer" as Render
+
+== Configuration Phase ==
+UI -> Config: City name "Berlin"
+Config -> Config: Resolve city to\nbounding box coordinates
+Config -> Config: Set grid resolution\n& tile size
+Config -> Config: Define feature filters\n(roads, buildings, etc.)
+
+== Download Phase ==
+Config -> Download: Request OSM data\nfor bounding box
+Download -> Download: Fetch from\nOverpass API
+note right: Async HTTP request\nWASM compatible
+Download --> Config: Raw OSM XML/JSON
+
+== Parse Phase ==
+Config -> Parser: Raw OSM data
+Parser -> Parser: Extract nodes,\nways, relations
+Parser -> Parser: Filter by configured\nfeature types
+Parser -> Parser: Convert coordinates\nto local space
+Parser --> Config: Structured OSM features
+
+== Grid Generation Phase ==
+Config -> Grid: OSM features +\ngrid configuration
+Grid -> Grid: Create empty grid\nwith specified resolution
+Grid -> Grid: Rasterize OSM ways\nto grid cells
+Grid -> Grid: Assign tile types\n(road, building, water, etc.)
+Grid -> Grid: Handle overlapping\nfeatures priority
+Grid --> Config: TileGrid structure
+
+== Rendering Phase ==
+Config -> Render: TileGrid + rendering config
+Render -> Render: Spawn tile entities\nin Bevy ECS
+Render -> Render: Assign sprites/colors\nper tile type
+Render -> Render: Position tiles in\nworld coordinates
+Render --> UI: Visual grid map
+
+note over UI, Render
+  All phases support async execution
+  Error handling at each stage
+  Progress feedback to user
+end note
+
+@enduml
