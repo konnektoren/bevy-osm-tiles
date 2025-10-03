@@ -2,7 +2,9 @@ use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber;
 
-use bevy_osm_tiles::{OsmConfig, OsmDownloader, OverpassDownloader, Region};
+use bevy_osm_tiles::{
+    FeatureSet, OsmConfig, OsmConfigBuilder, OsmDownloader, OsmFeature, OverpassDownloader, Region,
+};
 
 #[derive(Parser)]
 #[command(name = "osm-city-loader")]
@@ -11,6 +13,10 @@ struct Args {
     /// City name to load OSM data for
     #[arg(short, long)]
     city: String,
+
+    /// Feature preset to use: urban, transportation, natural, comprehensive
+    #[arg(short, long, default_value = "urban")]
+    features: String,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -36,6 +42,7 @@ async fn main() -> Result<(), String> {
 
     info!("🌍 OSM City Loader starting...");
     info!("📍 Target city: {}", args.city);
+    info!("🎯 Feature preset: {}", args.features);
 
     // Create downloader
     let downloader = OverpassDownloader::new();
@@ -54,12 +61,40 @@ async fn main() -> Result<(), String> {
         }
     }
 
-    // Create configuration
-    let config = OsmConfig::for_city(&args.city)
-        .with_grid_resolution(50)
-        .with_timeout(60);
+    // Create configuration with selected feature preset
+    let feature_set = match args.features.as_str() {
+        "urban" => FeatureSet::urban(),
+        "transportation" => FeatureSet::transportation(),
+        "natural" => FeatureSet::natural(),
+        "comprehensive" => FeatureSet::comprehensive(),
+        "gaming" => FeatureSet::urban()
+            .with_feature(OsmFeature::Amenities)
+            .with_feature(OsmFeature::Tourism),
+        _ => {
+            error!(
+                "Unknown feature preset: {}. Using 'urban' instead.",
+                args.features
+            );
+            FeatureSet::urban()
+        }
+    };
 
-    info!("⚙️  Configuration: {:?}", config);
+    let config = OsmConfigBuilder::new()
+        .city(&args.city)
+        .features(feature_set)
+        .grid_resolution(50)
+        .timeout(60)
+        .build();
+
+    info!("⚙️  Configuration created successfully");
+    info!(
+        "📊 Features included: {:?}",
+        config.features.features().iter().collect::<Vec<_>>()
+    );
+    info!(
+        "🔧 Custom queries: {}",
+        config.features.custom_queries().len()
+    );
 
     // First, resolve the region
     match config.region {
@@ -74,6 +109,7 @@ async fn main() -> Result<(), String> {
                         bbox.width()
                     );
                     info!("🎯 Center: {:.3}, {:.3}", bbox.center().0, bbox.center().1);
+                    info!("📐 Approximate area: {:.2} km²", bbox.area_km2());
                 }
                 Err(e) => {
                     error!("❌ Failed to resolve city: {}", e);
