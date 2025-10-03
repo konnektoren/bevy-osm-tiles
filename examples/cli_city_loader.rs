@@ -3,9 +3,11 @@ use tracing::{error, info, warn};
 use tracing_subscriber;
 
 use bevy_osm_tiles::{
-    DefaultGridGenerator, FeatureSet, GridGenerator, OsmConfig, OsmConfigBuilder, OsmDataProvider,
-    OsmFeature, ProviderFactory, Region, TileType,
+    DefaultGridGenerator, FeatureSet, GridGenerator, OsmConfigBuilder, OsmDataProvider, OsmFeature,
+    ProviderFactory, TileGrid, TileType,
 };
+
+use image::{ImageBuffer, Rgb, RgbImage};
 
 #[derive(Parser)]
 #[command(name = "osm-city-loader")]
@@ -26,6 +28,10 @@ struct Args {
     /// Grid resolution (cells per degree)
     #[arg(short, long, default_value = "100")]
     grid_resolution: u32,
+
+    /// Output PNG file path (optional)
+    #[arg(short, long)]
+    output: Option<String>,
 
     /// Skip grid generation (only fetch OSM data)
     #[arg(long)]
@@ -48,6 +54,30 @@ struct Args {
     grid_stats: bool,
 }
 
+#[cfg(feature = "cli")]
+fn generate_png(grid: &TileGrid, output_path: &str) -> Result<(), String> {
+    let (grid_width, grid_height) = grid.dimensions();
+
+    info!("🖼️  Generating {}x{} PNG image", grid_width, grid_height);
+
+    // Create image buffer - one pixel per grid cell
+    let mut img: RgbImage = ImageBuffer::new(grid_width as u32, grid_height as u32);
+
+    // Draw grid tiles
+    for (x, y, tile) in grid.iter_tiles() {
+        let color = tile.tile_type.default_color();
+        let rgb = Rgb([color.0, color.1, color.2]);
+        img.put_pixel(x as u32, y as u32, rgb);
+    }
+
+    // Save image
+    img.save(output_path)
+        .map_err(|e| format!("Failed to save PNG: {}", e))?;
+
+    info!("💾 PNG saved to: {}", output_path);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let args = Args::parse();
@@ -66,6 +96,10 @@ async fn main() -> Result<(), String> {
     info!("🎯 Feature preset: {}", args.features);
     info!("🔌 Provider: {}", args.provider);
     info!("🔢 Grid resolution: {} cells/degree", args.grid_resolution);
+
+    if let Some(ref output) = args.output {
+        info!("🖼️  PNG output: {}", output);
+    }
 
     // Create the appropriate provider
     let provider: Box<dyn OsmDataProvider> = match args.provider.as_str() {
@@ -294,6 +328,19 @@ async fn main() -> Result<(), String> {
                             color.2
                         );
                     }
+                }
+
+                // Generate PNG if requested
+                #[cfg(feature = "cli")]
+                if let Some(output_path) = &args.output {
+                    if let Err(e) = generate_png(&grid, output_path) {
+                        error!("❌ Failed to generate PNG: {}", e);
+                    }
+                }
+
+                #[cfg(not(feature = "cli"))]
+                if args.output.is_some() {
+                    warn!("⚠️  PNG output requires 'cli' feature to be enabled");
                 }
 
                 // Detailed grid statistics if requested
