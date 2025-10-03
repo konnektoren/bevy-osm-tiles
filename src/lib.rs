@@ -6,8 +6,10 @@
 
 pub mod config;
 pub mod error;
+pub mod generator;
 pub mod provider;
 
 pub use config::*;
 pub use error::*;
+pub use generator::*;
 pub use provider::*;
