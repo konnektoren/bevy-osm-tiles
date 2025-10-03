@@ -125,3 +125,209 @@ impl Region {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bounding_box_creation() {
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        assert_eq!(bbox.south, 52.0);
+        assert_eq!(bbox.west, 13.0);
+        assert_eq!(bbox.north, 53.0);
+        assert_eq!(bbox.east, 14.0);
+    }
+
+    #[test]
+    fn test_bounding_box_center() {
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        let center = bbox.center();
+        assert_eq!(center, (52.5, 13.5));
+
+        // Test with non-symmetric bbox
+        let bbox2 = BoundingBox::new(50.0, 10.0, 52.0, 15.0);
+        let center2 = bbox2.center();
+        assert_eq!(center2, (51.0, 12.5));
+    }
+
+    #[test]
+    fn test_bounding_box_dimensions() {
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        assert_eq!(bbox.width(), 1.0);
+        assert_eq!(bbox.height(), 1.0);
+
+        let bbox2 = BoundingBox::new(50.0, 10.0, 52.5, 15.5);
+        assert_eq!(bbox2.width(), 5.5);
+        assert_eq!(bbox2.height(), 2.5);
+    }
+
+    #[test]
+    fn test_bounding_box_contains() {
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+
+        // Points inside
+        assert!(bbox.contains(52.5, 13.5)); // Center
+        assert!(bbox.contains(52.0, 13.0)); // Southwest corner
+        assert!(bbox.contains(53.0, 14.0)); // Northeast corner
+        assert!(bbox.contains(52.1, 13.9)); // Inside
+
+        // Points outside
+        assert!(!bbox.contains(51.9, 13.5)); // Too far south
+        assert!(!bbox.contains(52.5, 12.9)); // Too far west
+        assert!(!bbox.contains(53.1, 13.5)); // Too far north
+        assert!(!bbox.contains(52.5, 14.1)); // Too far east
+    }
+
+    #[test]
+    fn test_bounding_box_area() {
+        // Small box around Berlin
+        let bbox = BoundingBox::new(52.4, 13.3, 52.6, 13.5);
+        let area = bbox.area_km2();
+
+        // Should be roughly 22km x 14km = ~308 km²
+        assert!(
+            area > 250.0 && area < 350.0,
+            "Area should be around 308 km², got {}",
+            area
+        );
+    }
+
+    #[test]
+    fn test_bounding_box_expand() {
+        let bbox = BoundingBox::new(52.5, 13.4, 52.6, 13.5);
+        let expanded = bbox.expand_by_km(1.0);
+
+        // Original box should be contained in expanded box
+        assert!(expanded.contains(bbox.south, bbox.west));
+        assert!(expanded.contains(bbox.north, bbox.east));
+        assert!(expanded.contains(52.55, 13.45)); // Center should still be contained
+
+        // Expanded box should be larger
+        assert!(expanded.height() > bbox.height());
+        assert!(expanded.width() > bbox.width());
+
+        // Centers should be approximately the same
+        let original_center = bbox.center();
+        let expanded_center = expanded.center();
+        assert!((original_center.0 - expanded_center.0).abs() < 0.01);
+        assert!((original_center.1 - expanded_center.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_bounding_box_expand_zero() {
+        let bbox = BoundingBox::new(52.5, 13.4, 52.6, 13.5);
+        let expanded = bbox.expand_by_km(0.0);
+
+        // Should be approximately the same
+        assert!((bbox.south - expanded.south).abs() < 0.001);
+        assert!((bbox.west - expanded.west).abs() < 0.001);
+        assert!((bbox.north - expanded.north).abs() < 0.001);
+        assert!((bbox.east - expanded.east).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_region_city_creation() {
+        let region = Region::city("Berlin");
+        match region {
+            Region::City { name } => assert_eq!(name, "Berlin"),
+            _ => panic!("Expected City variant"),
+        }
+
+        let region2 = Region::city(String::from("Munich"));
+        match region2 {
+            Region::City { name } => assert_eq!(name, "Munich"),
+            _ => panic!("Expected City variant"),
+        }
+    }
+
+    #[test]
+    fn test_region_bbox_creation() {
+        let region = Region::bbox(52.0, 13.0, 53.0, 14.0);
+        match region {
+            Region::BoundingBox(bbox) => {
+                assert_eq!(bbox.south, 52.0);
+                assert_eq!(bbox.west, 13.0);
+                assert_eq!(bbox.north, 53.0);
+                assert_eq!(bbox.east, 14.0);
+            }
+            _ => panic!("Expected BoundingBox variant"),
+        }
+    }
+
+    #[test]
+    fn test_region_center_radius_creation() {
+        let region = Region::center_radius(52.5, 13.4, 5.0);
+        match region {
+            Region::CenterRadius {
+                lat,
+                lon,
+                radius_km,
+            } => {
+                assert_eq!(lat, 52.5);
+                assert_eq!(lon, 13.4);
+                assert_eq!(radius_km, 5.0);
+            }
+            _ => panic!("Expected CenterRadius variant"),
+        }
+    }
+
+    #[test]
+    fn test_bounding_box_serialization() {
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+
+        // Test JSON serialization
+        let json = serde_json::to_string(&bbox).expect("Failed to serialize");
+        let deserialized: BoundingBox = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(bbox, deserialized);
+    }
+
+    #[test]
+    fn test_region_serialization() {
+        let regions = vec![
+            Region::city("Berlin"),
+            Region::bbox(52.0, 13.0, 53.0, 14.0),
+            Region::center_radius(52.5, 13.4, 5.0),
+        ];
+
+        for region in regions {
+            let json = serde_json::to_string(&region).expect("Failed to serialize");
+            let deserialized: Region = serde_json::from_str(&json).expect("Failed to deserialize");
+
+            // Compare by debug representation since Region doesn't implement PartialEq
+            assert_eq!(format!("{:?}", region), format!("{:?}", deserialized));
+        }
+    }
+
+    #[test]
+    fn test_bounding_box_edge_cases() {
+        // Test with very small bbox
+        let tiny_bbox = BoundingBox::new(52.5, 13.4, 52.5001, 13.4001);
+        let area = tiny_bbox.area_km2();
+        assert!(
+            area > 0.0 && area < 0.01,
+            "Tiny area should be very small but positive"
+        );
+
+        // Test with bbox crossing prime meridian (longitude 0)
+        let cross_meridian = BoundingBox::new(51.0, -1.0, 52.0, 1.0);
+        assert_eq!(cross_meridian.width(), 2.0);
+        assert!(cross_meridian.contains(51.5, 0.0));
+
+        // Test with bbox crossing equator
+        let cross_equator = BoundingBox::new(-1.0, 10.0, 1.0, 11.0);
+        assert_eq!(cross_equator.height(), 2.0);
+        assert!(cross_equator.contains(0.0, 10.5));
+    }
+
+    #[test]
+    fn test_bounding_box_invalid_coordinates() {
+        // These are technically invalid but should still work
+        let inverted_lat = BoundingBox::new(53.0, 13.0, 52.0, 14.0); // south > north
+        assert_eq!(inverted_lat.height(), -1.0);
+
+        let inverted_lon = BoundingBox::new(52.0, 14.0, 53.0, 13.0); // west > east
+        assert_eq!(inverted_lon.width(), -1.0);
+    }
+}

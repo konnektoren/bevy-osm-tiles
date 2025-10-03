@@ -321,3 +321,246 @@ impl From<OsmFeature> for FeatureSet {
         Self::new().with_feature(feature)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_osm_feature_to_queries() {
+        // Test Roads feature
+        let roads_queries = OsmFeature::Roads.to_osm_queries();
+        assert!(!roads_queries.is_empty());
+        assert!(roads_queries.contains(&OsmTagQuery::new("highway", Some("primary"))));
+        assert!(roads_queries.contains(&OsmTagQuery::new("highway", Some("residential"))));
+
+        // Test Railways feature
+        let railways_queries = OsmFeature::Railways.to_osm_queries();
+        assert_eq!(railways_queries.len(), 1);
+        assert_eq!(
+            railways_queries[0],
+            OsmTagQuery::new("railway", None::<String>)
+        );
+
+        // Test Buildings feature
+        let buildings_queries = OsmFeature::Buildings.to_osm_queries();
+        assert_eq!(buildings_queries.len(), 1);
+        assert_eq!(
+            buildings_queries[0],
+            OsmTagQuery::new("building", None::<String>)
+        );
+    }
+
+    #[test]
+    fn test_osm_feature_descriptions() {
+        assert_eq!(OsmFeature::Roads.description(), "Local roads and streets");
+        assert_eq!(
+            OsmFeature::Buildings.description(),
+            "All building structures"
+        );
+        assert_eq!(OsmFeature::Water.description(), "All water features");
+        assert_eq!(
+            OsmFeature::Amenities.description(),
+            "Public amenities and services"
+        );
+    }
+
+    #[test]
+    fn test_osm_tag_query_creation() {
+        let query1 = OsmTagQuery::new("highway", Some("primary"));
+        assert_eq!(query1.key, "highway");
+        assert_eq!(query1.value, Some("primary".to_string()));
+
+        let query2 = OsmTagQuery::new("building", None::<String>);
+        assert_eq!(query2.key, "building");
+        assert_eq!(query2.value, None);
+    }
+
+    #[test]
+    fn test_osm_tag_query_overpass_filter() {
+        let query_with_value = OsmTagQuery::new("highway", Some("primary"));
+        assert_eq!(
+            query_with_value.to_overpass_filter(),
+            "[\"highway\"][\"primary\"]"
+        );
+
+        let query_without_value = OsmTagQuery::new("building", None::<String>);
+        assert_eq!(query_without_value.to_overpass_filter(), "[\"building\"]");
+    }
+
+    #[test]
+    fn test_feature_set_creation() {
+        let empty_set = FeatureSet::new();
+        assert!(empty_set.is_empty());
+        assert_eq!(empty_set.len(), 0);
+
+        let urban_set = FeatureSet::urban();
+        assert!(!urban_set.is_empty());
+        assert!(urban_set.contains_feature(&OsmFeature::Roads));
+        assert!(urban_set.contains_feature(&OsmFeature::Buildings));
+        assert!(urban_set.contains_feature(&OsmFeature::Parks));
+        assert!(urban_set.contains_feature(&OsmFeature::Water));
+    }
+
+    #[test]
+    fn test_feature_set_presets() {
+        let transportation = FeatureSet::transportation();
+        assert!(transportation.contains_feature(&OsmFeature::Roads));
+        assert!(transportation.contains_feature(&OsmFeature::Highways));
+        assert!(transportation.contains_feature(&OsmFeature::Railways));
+        assert!(transportation.contains_feature(&OsmFeature::Footpaths));
+        assert!(transportation.contains_feature(&OsmFeature::Parking));
+
+        let natural = FeatureSet::natural();
+        assert!(natural.contains_feature(&OsmFeature::Water));
+        assert!(natural.contains_feature(&OsmFeature::Rivers));
+        assert!(natural.contains_feature(&OsmFeature::Lakes));
+        assert!(natural.contains_feature(&OsmFeature::Forests));
+        assert!(natural.contains_feature(&OsmFeature::Parks));
+        assert!(natural.contains_feature(&OsmFeature::Grassland));
+
+        let comprehensive = FeatureSet::comprehensive();
+        assert!(comprehensive.contains_feature(&OsmFeature::Roads));
+        assert!(comprehensive.contains_feature(&OsmFeature::Buildings));
+        assert!(comprehensive.contains_feature(&OsmFeature::Water));
+        assert!(comprehensive.contains_feature(&OsmFeature::Railways));
+        assert!(comprehensive.contains_feature(&OsmFeature::Amenities));
+    }
+
+    #[test]
+    fn test_feature_set_modification() {
+        let mut set = FeatureSet::new()
+            .with_feature(OsmFeature::Roads)
+            .with_feature(OsmFeature::Buildings);
+
+        assert_eq!(set.len(), 2);
+        assert!(set.contains_feature(&OsmFeature::Roads));
+        assert!(set.contains_feature(&OsmFeature::Buildings));
+        assert!(!set.contains_feature(&OsmFeature::Water));
+
+        set = set.without_feature(&OsmFeature::Roads);
+        assert_eq!(set.len(), 1);
+        assert!(!set.contains_feature(&OsmFeature::Roads));
+        assert!(set.contains_feature(&OsmFeature::Buildings));
+    }
+
+    #[test]
+    fn test_feature_set_with_multiple_features() {
+        let features = vec![OsmFeature::Roads, OsmFeature::Buildings, OsmFeature::Water];
+        let set = FeatureSet::new().with_features(features.clone());
+
+        assert_eq!(set.len(), 3);
+        for feature in features {
+            assert!(set.contains_feature(&feature));
+        }
+    }
+
+    #[test]
+    fn test_feature_set_custom_queries() {
+        let custom_queries = vec![
+            OsmTagQuery::new("shop", Some("supermarket")),
+            OsmTagQuery::new("emergency", Some("hospital")),
+        ];
+
+        let set = FeatureSet::new()
+            .with_feature(OsmFeature::Roads)
+            .with_custom_queries(custom_queries.clone());
+
+        assert_eq!(set.custom_queries().len(), 2);
+        assert!(set.custom_queries().contains(&custom_queries[0]));
+        assert!(set.custom_queries().contains(&custom_queries[1]));
+    }
+
+    #[test]
+    fn test_feature_set_single_custom_query() {
+        let query = OsmTagQuery::new("shop", Some("bakery"));
+        let set = FeatureSet::new().with_custom_query(query.clone());
+
+        assert_eq!(set.custom_queries().len(), 1);
+        assert_eq!(set.custom_queries()[0], query);
+    }
+
+    #[test]
+    fn test_feature_set_to_osm_queries() {
+        let set = FeatureSet::new()
+            .with_feature(OsmFeature::Buildings)
+            .with_custom_query(OsmTagQuery::new("shop", Some("bakery")));
+
+        let queries = set.to_osm_queries();
+
+        // Should contain building query
+        assert!(queries.contains(&OsmTagQuery::new("building", None::<String>)));
+
+        // Should contain custom query
+        assert!(queries.contains(&OsmTagQuery::new("shop", Some("bakery"))));
+    }
+
+    #[test]
+    fn test_feature_set_deduplication() {
+        let set = FeatureSet::new()
+            .with_feature(OsmFeature::Water) // Includes "natural"="water"
+            .with_feature(OsmFeature::Lakes) // Also includes "natural"="water"
+            .with_custom_query(OsmTagQuery::new("natural", Some("water"))); // Duplicate
+
+        let queries = set.to_osm_queries();
+
+        // Count occurrences of the natural=water query
+        let water_queries: Vec<_> = queries
+            .iter()
+            .filter(|q| q.key == "natural" && q.value == Some("water".to_string()))
+            .collect();
+
+        // Should be deduplicated to only one occurrence
+        assert_eq!(water_queries.len(), 1);
+    }
+
+    #[test]
+    fn test_feature_set_from_conversions() {
+        // Test From<Vec<OsmFeature>>
+        let features = vec![OsmFeature::Roads, OsmFeature::Buildings];
+        let set: FeatureSet = features.clone().into();
+        assert_eq!(set.len(), 2);
+        for feature in features {
+            assert!(set.contains_feature(&feature));
+        }
+
+        // Test From<OsmFeature>
+        let set: FeatureSet = OsmFeature::Water.into();
+        assert_eq!(set.len(), 1);
+        assert!(set.contains_feature(&OsmFeature::Water));
+    }
+
+    #[test]
+    fn test_feature_set_default() {
+        let default_set = FeatureSet::default();
+        let urban_set = FeatureSet::urban();
+
+        // Default should be the same as urban
+        assert_eq!(default_set.features(), urban_set.features());
+        assert_eq!(default_set.custom_queries(), urban_set.custom_queries());
+    }
+
+    #[test]
+    fn test_osm_tag_query_equality() {
+        let query1 = OsmTagQuery::new("highway", Some("primary"));
+        let query2 = OsmTagQuery::new("highway", Some("primary"));
+        let query3 = OsmTagQuery::new("highway", Some("secondary"));
+        let query4 = OsmTagQuery::new("building", None::<String>);
+
+        assert_eq!(query1, query2);
+        assert_ne!(query1, query3);
+        assert_ne!(query1, query4);
+    }
+
+    #[test]
+    fn test_feature_set_serialization() {
+        let set = FeatureSet::urban().with_custom_query(OsmTagQuery::new("shop", Some("bakery")));
+
+        // Test that it can be serialized and deserialized
+        let json = serde_json::to_string(&set).expect("Failed to serialize");
+        let deserialized: FeatureSet = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(set.features(), deserialized.features());
+        assert_eq!(set.custom_queries(), deserialized.custom_queries());
+    }
+}

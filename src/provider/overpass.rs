@@ -212,7 +212,6 @@ impl OsmDataProvider for OverpassProvider {
 
         let status = response.status();
         if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
             return Err(OsmTilesError::Network(NetworkError::HttpError {
                 status: status.as_u16(),
             }));
