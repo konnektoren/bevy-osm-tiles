@@ -1,0 +1,51 @@
+# OpenStreetMap Tile Grid Library AI Assistant Rules
+
+## Project Context
+
+- **Library**: Rust library for downloading OpenStreetMap data and generating grid maps
+- **Tech**: Pure Rust core with optional Bevy ECS integration, trait-based abstraction, WASM-compatible dependencies only
+- **Architecture**: Core library with optional Bevy plugin feature, strict separation of concerns, configurable downloaders
+- **Target**: WASM-compatible execution environment
+- **Testing**: Comprehensive unit/integration tests, trait-based mocking for network operations
+
+---
+
+## Core Architecture Principles
+
+### **Library-First Design**
+- Core functionality must be usable without any game engine dependencies
+- Bevy integration is an optional feature (`bevy` feature gate)
+- All core types, traits, and functionality exist in the root library
+- Plugin integration adds convenience wrappers and ECS integration only
+
+### **Trait-Based Abstraction**
+- All external dependencies (HTTP, file I/O, time) abstracted behind traits
+- Downloadable/injectable implementations for different environments
+- Mock implementations for testing
+- WASM and native implementations where needed
+
+### **WASM Compatibility**
+- Only WASM-compatible dependencies allowed
+- No `std::thread`, use async/await patterns
+- No file system access assumptions
+- Browser-compatible HTTP clients only
+
+---
+
+## Dependency Guidelines
+
+### **Allowed Dependencies**
+- `serde` + `serde_json` for serialization
+- `reqwest` with WASM features for HTTP
+- `async-trait` for async trait definitions
+- `thiserror` for error handling
+- `log` for logging abstraction
+- `geo-types` for geometric primitives
+- `bevy` (optional, feature-gated)
+
+### **Forbidden Dependencies**
+- `std::fs` direct usage
+- `tokio` with non-WASM features
+- `std::thread` or blocking operations
+- Platform-specific crates
+- Heavy image processing libraries
