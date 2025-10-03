@@ -3,7 +3,8 @@ use tracing::{error, info, warn};
 use tracing_subscriber;
 
 use bevy_osm_tiles::{
-    FeatureSet, OsmConfig, OsmConfigBuilder, OsmDataProvider, OsmFeature, ProviderFactory, Region,
+    DefaultGridGenerator, FeatureSet, GridGenerator, OsmConfig, OsmConfigBuilder, OsmDataProvider,
+    OsmFeature, ProviderFactory, Region, TileType,
 };
 
 #[derive(Parser)]
@@ -22,6 +23,14 @@ struct Args {
     #[arg(short, long, default_value = "overpass")]
     provider: String,
 
+    /// Grid resolution (cells per degree)
+    #[arg(short, long, default_value = "100")]
+    grid_resolution: u32,
+
+    /// Skip grid generation (only fetch OSM data)
+    #[arg(long)]
+    skip_grid: bool,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -33,6 +42,10 @@ struct Args {
     /// Simulate network delay (for mock provider, in milliseconds)
     #[arg(long)]
     delay: Option<u64>,
+
+    /// Show detailed grid statistics
+    #[arg(long)]
+    grid_stats: bool,
 }
 
 #[tokio::main]
@@ -52,6 +65,7 @@ async fn main() -> Result<(), String> {
     info!("📍 Target city: {}", args.city);
     info!("🎯 Feature preset: {}", args.features);
     info!("🔌 Provider: {}", args.provider);
+    info!("🔢 Grid resolution: {} cells/degree", args.grid_resolution);
 
     // Create the appropriate provider
     let provider: Box<dyn OsmDataProvider> = match args.provider.as_str() {
@@ -128,7 +142,7 @@ async fn main() -> Result<(), String> {
     let config = OsmConfigBuilder::new()
         .city(&args.city)
         .features(feature_set)
-        .grid_resolution(50)
+        .grid_resolution(args.grid_resolution)
         .timeout(60)
         .build();
 
@@ -144,7 +158,7 @@ async fn main() -> Result<(), String> {
 
     // Resolve the region
     info!("🗺️  Resolving region...");
-    match provider.resolve_region(&config.region).await {
+    let bbox = match provider.resolve_region(&config.region).await {
         Ok(bbox) => {
             info!("📍 Resolved to bounding box: {:?}", bbox);
             info!(
@@ -154,16 +168,17 @@ async fn main() -> Result<(), String> {
             );
             info!("🎯 Center: {:.3}, {:.3}", bbox.center().0, bbox.center().1);
             info!("📐 Approximate area: {:.2} km²", bbox.area_km2());
+            bbox
         }
         Err(e) => {
             error!("❌ Failed to resolve region: {}", e);
             return Err(e.to_string());
         }
-    }
+    };
 
     // Fetch OSM data
     info!("⬇️  Fetching OSM data...");
-    match provider.fetch_data(&config).await {
+    let osm_data = match provider.fetch_data(&config).await {
         Ok(osm_data) => {
             info!("✅ Successfully fetched OSM data!");
             info!("📊 Data format: {:?}", osm_data.format);
@@ -193,11 +208,204 @@ async fn main() -> Result<(), String> {
                 };
                 info!("{}", preview);
             }
+
+            osm_data
         }
         Err(e) => {
             error!("❌ Failed to fetch OSM data: {}", e);
             return Err(e.to_string());
         }
+    };
+
+    // Generate grid if not skipped
+    if !args.skip_grid {
+        info!("🔲 Generating tile grid...");
+
+        // Create grid generator
+        let generator = DefaultGridGenerator::new();
+        let generator_caps = generator.capabilities();
+
+        info!("🔧 Grid generator capabilities:");
+        if let Some(max_size) = generator_caps.max_grid_size {
+            info!("  - Max grid size: {}x{}", max_size.0, max_size.1);
+        }
+        info!("  - Supported CRS: {:?}", generator_caps.supported_crs);
+        info!(
+            "  - Parallel processing: {}",
+            generator_caps.supports_parallel
+        );
+        if let Some(notes) = &generator_caps.notes {
+            info!("  - Notes: {}", notes);
+        }
+
+        // Generate the grid
+        match generator.generate_grid(&osm_data, &config).await {
+            Ok(grid) => {
+                info!("✅ Grid generation completed!");
+
+                let (width, height) = grid.dimensions();
+                info!(
+                    "📐 Grid dimensions: {}x{} ({} total tiles)",
+                    width,
+                    height,
+                    grid.tile_count()
+                );
+                info!("📏 Meters per tile: ~{:.1}m", grid.meters_per_tile);
+
+                // Show grid metadata
+                info!("📊 Grid metadata:");
+                info!(
+                    "  - Elements processed: {}",
+                    grid.metadata.elements_processed
+                );
+                info!("  - Tiles populated: {}", grid.metadata.tiles_populated);
+                info!(
+                    "  - Generation time: {:.1}s",
+                    grid.metadata.generation_time_ms as f64 / 1000.0
+                );
+                info!("  - Algorithm: {}", grid.metadata.algorithm);
+
+                // Show grid statistics
+                let stats = grid.statistics();
+                info!("📈 Grid statistics:");
+                info!("  - Coverage ratio: {:.1}%", stats.coverage_ratio * 100.0);
+                info!(
+                    "  - Non-empty tiles: {}/{}",
+                    stats.non_empty_tiles, stats.total_tiles
+                );
+
+                // Show tile type distribution
+                info!("🎨 Tile type distribution:");
+                let mut type_counts: Vec<_> = stats.tile_type_counts.iter().collect();
+                type_counts.sort_by(|a, b| b.1.cmp(a.1)); // Sort by count descending
+
+                for (tile_type, count) in type_counts.iter().take(10) {
+                    // Show top 10
+                    let percentage = **count as f64 / stats.total_tiles as f64 * 100.0;
+                    if **count > 0 {
+                        let color = tile_type.default_color();
+                        info!(
+                            "  - {:12}: {:6} tiles ({:5.1}%) [RGB: {:3},{:3},{:3}]",
+                            tile_type.name(),
+                            count,
+                            percentage,
+                            color.0,
+                            color.1,
+                            color.2
+                        );
+                    }
+                }
+
+                // Detailed grid statistics if requested
+                if args.grid_stats {
+                    info!("🔍 Detailed grid analysis:");
+
+                    // Find some interesting tiles
+                    let road_tiles = grid.tiles_of_type(&TileType::Road);
+                    let building_tiles = grid.tiles_of_type(&TileType::Building);
+                    let water_tiles = grid.tiles_of_type(&TileType::Water);
+
+                    if !road_tiles.is_empty() {
+                        let (x, y, _) = road_tiles[0];
+                        if let Some((lat, lon)) = grid.grid_to_geo(x, y) {
+                            info!(
+                                "  - First road tile at grid ({}, {}) -> geo ({:.6}, {:.6})",
+                                x, y, lat, lon
+                            );
+                        }
+                    }
+
+                    if !building_tiles.is_empty() {
+                        let (x, y, tile) = &building_tiles[0];
+                        if let Some((lat, lon)) = grid.grid_to_geo(*x, *y) {
+                            info!(
+                                "  - First building tile at grid ({}, {}) -> geo ({:.6}, {:.6})",
+                                x, y, lat, lon
+                            );
+                            if let Some(metadata) = &tile.metadata {
+                                info!("    - OSM IDs: {:?}", metadata.osm_ids);
+                                if !metadata.tags.is_empty() {
+                                    info!("    - Tags: {:?}", metadata.tags);
+                                }
+                            }
+                        }
+                    }
+
+                    if !water_tiles.is_empty() {
+                        info!("  - Water tiles found: {}", water_tiles.len());
+                    }
+
+                    // Show coverage in different areas
+                    let center = bbox.center();
+                    if let Some((center_x, center_y)) = grid.geo_to_grid(center.0, center.1) {
+                        info!(
+                            "  - Center tile ({}, {}) type: {:?}",
+                            center_x,
+                            center_y,
+                            grid.get_tile(center_x, center_y).map(|t| &t.tile_type)
+                        );
+                    }
+
+                    // Show a small sample area around center
+                    if let Some((center_x, center_y)) = grid.geo_to_grid(center.0, center.1) {
+                        let sample_size = 5;
+                        let start_x = center_x.saturating_sub(sample_size / 2);
+                        let start_y = center_y.saturating_sub(sample_size / 2);
+
+                        if let Some(area) =
+                            grid.get_area(start_x, start_y, sample_size, sample_size)
+                        {
+                            info!(
+                                "  - {}x{} sample area around center:",
+                                sample_size, sample_size
+                            );
+                            for (y, row) in area.iter().enumerate() {
+                                let row_str: String = row
+                                    .iter()
+                                    .map(|tile| match tile.tile_type {
+                                        TileType::Empty => ".",
+                                        TileType::Road => "R",
+                                        TileType::Building => "B",
+                                        TileType::Water => "W",
+                                        TileType::GreenSpace => "G",
+                                        TileType::Railway => "T",
+                                        TileType::Parking => "P",
+                                        TileType::Amenity => "A",
+                                        TileType::Tourism => "U",
+                                        TileType::Industrial => "I",
+                                        TileType::Residential => "H",
+                                        TileType::Commercial => "C",
+                                        TileType::Custom(_) => "X",
+                                    })
+                                    .collect();
+                                info!("    [{}]: {}", start_y + y, row_str);
+                            }
+                        }
+                    }
+                }
+
+                // Save grid to file if verbose
+                if args.verbose {
+                    match serde_json::to_string_pretty(&grid) {
+                        Ok(json) => {
+                            let filename =
+                                format!("{}_grid.json", args.city.replace(" ", "_").to_lowercase());
+                            match std::fs::write(&filename, json) {
+                                Ok(()) => info!("💾 Grid saved to: {}", filename),
+                                Err(e) => warn!("⚠️  Failed to save grid: {}", e),
+                            }
+                        }
+                        Err(e) => warn!("⚠️  Failed to serialize grid: {}", e),
+                    }
+                }
+            }
+            Err(e) => {
+                error!("❌ Failed to generate grid: {}", e);
+                return Err(e.to_string());
+            }
+        }
+    } else {
+        info!("⏭️  Skipping grid generation");
     }
 
     info!("🎉 City loader completed successfully!");
