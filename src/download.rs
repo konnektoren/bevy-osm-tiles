@@ -101,38 +101,24 @@ impl OverpassDownloader {
 
         let mut query = "[out:json][timeout:25];\n(\n".to_string();
 
-        // Add feature-specific queries
-        if config.features.roads {
-            query.push_str(&format!("  way[\"highway\"]({});\n", bbox_str));
-        }
+        // Get all OSM tag queries from the feature set
+        let tag_queries = config.features.to_osm_queries();
 
-        if config.features.buildings {
-            query.push_str(&format!("  way[\"building\"]({});\n", bbox_str));
-            query.push_str(&format!("  relation[\"building\"]({});\n", bbox_str));
-        }
+        for tag_query in tag_queries {
+            // Add way queries
+            let filter = match &tag_query.value {
+                Some(value) => format!("[\"{}\"][\"{}\"]", tag_query.key, value),
+                None => format!("[\"{}\"]", tag_query.key),
+            };
+            query.push_str(&format!("  way{}({});\n", filter, bbox_str));
 
-        if config.features.water {
-            query.push_str(&format!("  way[\"waterway\"]({});\n", bbox_str));
-            query.push_str(&format!("  way[\"natural\"=\"water\"]({});\n", bbox_str));
-            query.push_str(&format!(
-                "  relation[\"natural\"=\"water\"]({});\n",
-                bbox_str
-            ));
-        }
-
-        if config.features.green_spaces {
-            query.push_str(&format!("  way[\"leisure\"=\"park\"]({});\n", bbox_str));
-            query.push_str(&format!("  way[\"landuse\"=\"forest\"]({});\n", bbox_str));
-            query.push_str(&format!("  way[\"natural\"=\"wood\"]({});\n", bbox_str));
-        }
-
-        if config.features.railways {
-            query.push_str(&format!("  way[\"railway\"]({});\n", bbox_str));
-        }
-
-        // Add custom tags
-        for tag in &config.features.custom_tags {
-            query.push_str(&format!("  way[\"{}\"]({});\n", tag, bbox_str));
+            // Add relation queries for some feature types
+            if tag_query.key == "building"
+                || tag_query.key == "natural"
+                || tag_query.key == "landuse"
+            {
+                query.push_str(&format!("  relation{}({});\n", filter, bbox_str));
+            }
         }
 
         query.push_str(");\nout geom;");
