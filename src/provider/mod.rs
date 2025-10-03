@@ -1,3 +1,4 @@
+mod integration_tests;
 mod mock;
 mod overpass;
 
@@ -24,7 +25,7 @@ pub struct OsmData {
 }
 
 /// Format of OSM data
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OsmDataFormat {
     /// OSM XML format
     Xml,
@@ -195,5 +196,187 @@ impl ProviderFactory {
                 Self::available_providers()
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::OsmConfigBuilder;
+
+    #[test]
+    fn test_osm_metadata_creation() {
+        let metadata = OsmMetadata::new("test-source", "test-provider");
+
+        assert_eq!(metadata.source, "test-source");
+        assert_eq!(metadata.provider_type, "test-provider");
+        assert!(metadata.element_count.is_none());
+        assert!(metadata.processing_time_ms.is_none());
+        assert!(metadata.extra.is_empty());
+        assert!(!metadata.timestamp.is_empty());
+    }
+
+    #[test]
+    fn test_osm_metadata_builder() {
+        let metadata = OsmMetadata::new("source", "provider")
+            .with_element_count(42)
+            .with_processing_time(1500)
+            .with_extra("key1", "value1")
+            .with_extra("key2", "value2");
+
+        assert_eq!(metadata.element_count, Some(42));
+        assert_eq!(metadata.processing_time_ms, Some(1500));
+        assert_eq!(metadata.extra.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(metadata.extra.get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_provider_capabilities_default() {
+        let capabilities = ProviderCapabilities::default();
+
+        assert!(!capabilities.supports_real_time);
+        assert!(!capabilities.requires_network);
+        assert!(!capabilities.supports_geocoding);
+        assert!(capabilities.max_area_km2.is_none());
+        assert_eq!(capabilities.supported_formats, vec![OsmDataFormat::Json]);
+        assert!(capabilities.rate_limit_rpm.is_none());
+        assert!(capabilities.wasm_compatible);
+        assert!(capabilities.notes.is_none());
+    }
+
+    #[test]
+    fn test_provider_factory_available_providers() {
+        let providers = ProviderFactory::available_providers();
+        assert_eq!(providers, vec!["overpass", "mock"]);
+    }
+
+    #[test]
+    fn test_provider_factory_create_overpass() {
+        let provider = ProviderFactory::overpass();
+        assert_eq!(provider.provider_type(), "overpass");
+    }
+
+    #[test]
+    fn test_provider_factory_create_overpass_with_url() {
+        let custom_url = "https://custom.overpass.api/interpreter";
+        let provider = ProviderFactory::overpass_with_url(custom_url);
+        assert_eq!(provider.base_url, custom_url);
+    }
+
+    #[test]
+    fn test_provider_factory_create_mock() {
+        let provider = ProviderFactory::mock();
+        assert_eq!(provider.provider_type(), "mock");
+    }
+
+    #[test]
+    fn test_provider_factory_create_mock_with_data() {
+        let custom_data = r#"{"custom": "data"}"#;
+        let provider = ProviderFactory::mock_with_data(custom_data);
+        // We can't easily test the internal data without accessing private fields,
+        // but we can verify it was created
+        assert_eq!(provider.provider_type(), "mock");
+    }
+
+    #[test]
+    fn test_provider_factory_create_mock_with_delay() {
+        let provider = ProviderFactory::mock_with_delay(1000);
+        assert_eq!(provider.provider_type(), "mock");
+        // The delay is internal, but we know it was set
+    }
+
+    #[test]
+    fn test_provider_factory_create_provider_by_name() {
+        // Test valid provider names
+        let overpass = ProviderFactory::create_provider("overpass").unwrap();
+        assert_eq!(overpass.provider_type(), "overpass");
+
+        let mock = ProviderFactory::create_provider("mock").unwrap();
+        assert_eq!(mock.provider_type(), "mock");
+
+        // Test invalid provider name
+        let result = ProviderFactory::create_provider("invalid");
+        assert!(result.is_err());
+
+        if let Err(crate::OsmTilesError::Config(msg)) = result {
+            assert!(msg.contains("Unknown provider: 'invalid'"));
+            assert!(msg.contains("Available providers:"));
+        } else {
+            panic!("Expected Config error");
+        }
+    }
+
+    #[test]
+    fn test_osm_data_format_serialization() {
+        // Test that formats can be serialized/deserialized
+        let xml_format = OsmDataFormat::Xml;
+        let json_format = OsmDataFormat::Json;
+
+        let xml_json = serde_json::to_string(&xml_format).unwrap();
+        let json_json = serde_json::to_string(&json_format).unwrap();
+
+        assert!(xml_json.contains("Xml"));
+        assert!(json_json.contains("Json"));
+
+        let xml_deserialized: OsmDataFormat = serde_json::from_str(&xml_json).unwrap();
+        let json_deserialized: OsmDataFormat = serde_json::from_str(&json_json).unwrap();
+
+        assert!(matches!(xml_deserialized, OsmDataFormat::Xml));
+        assert!(matches!(json_deserialized, OsmDataFormat::Json));
+    }
+
+    #[test]
+    fn test_osm_data_serialization() {
+        use crate::BoundingBox;
+
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        let metadata = OsmMetadata::new("test", "test");
+        let osm_data = OsmData {
+            raw_data: "test data".to_string(),
+            format: OsmDataFormat::Json,
+            bounding_box: bbox,
+            metadata,
+        };
+
+        // Should be serializable
+        let json = serde_json::to_string(&osm_data).unwrap();
+        assert!(!json.is_empty());
+
+        // Should be deserializable
+        let deserialized: OsmData = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.raw_data, "test data");
+        assert!(matches!(deserialized.format, OsmDataFormat::Json));
+    }
+
+    #[tokio::test]
+    async fn test_provider_trait_methods() {
+        // Test that we can use providers through the trait
+        let provider: Box<dyn OsmDataProvider> = Box::new(ProviderFactory::mock());
+
+        assert_eq!(provider.provider_type(), "mock");
+
+        let capabilities = provider.capabilities();
+        assert!(capabilities.wasm_compatible);
+
+        // Test availability
+        let availability = provider.test_availability().await;
+        assert!(availability.is_ok());
+
+        // Test region resolution
+        let region = Region::city("test");
+        let bbox = provider.resolve_region(&region).await.unwrap();
+        assert!(bbox.contains(52.5, 13.4)); // Should be in the test range
+    }
+
+    #[tokio::test]
+    async fn test_provider_trait_with_config() {
+        let provider: Box<dyn OsmDataProvider> = Box::new(ProviderFactory::mock());
+        let config = OsmConfigBuilder::new().city("test").build();
+
+        let result = provider.fetch_data(&config).await.unwrap();
+
+        assert!(!result.raw_data.is_empty());
+        assert!(matches!(result.format, OsmDataFormat::Json));
+        assert_eq!(result.metadata.provider_type, "mock");
     }
 }

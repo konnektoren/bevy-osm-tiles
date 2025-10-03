@@ -383,3 +383,231 @@ impl Default for OverpassProvider {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FeatureSet, OsmConfigBuilder, OsmFeature};
+    use std::time::Duration;
+
+    #[test]
+    fn test_overpass_provider_basic() {
+        let provider = OverpassProvider::new();
+        assert_eq!(provider.provider_type(), "overpass");
+        assert_eq!(provider.base_url, "https://overpass-api.de/api/interpreter");
+
+        let capabilities = provider.capabilities();
+        assert!(capabilities.supports_real_time);
+        assert!(capabilities.requires_network);
+        assert!(capabilities.supports_geocoding);
+        assert!(capabilities.wasm_compatible);
+        assert_eq!(capabilities.max_area_km2, Some(1000.0));
+        assert_eq!(capabilities.rate_limit_rpm, Some(60));
+    }
+
+    #[test]
+    fn test_overpass_provider_custom_url() {
+        let custom_url = "https://lz4.overpass-api.de/api/interpreter";
+        let provider = OverpassProvider::with_base_url(custom_url);
+        assert_eq!(provider.base_url, custom_url);
+    }
+
+    #[test]
+    fn test_overpass_provider_with_timeout() {
+        let timeout = Duration::from_secs(120);
+        let provider = OverpassProvider::new().with_timeout(timeout);
+        assert_eq!(provider.custom_timeout, Some(timeout));
+    }
+
+    #[test]
+    fn test_overpass_provider_with_user_agent() {
+        let user_agent = "test-agent/1.0";
+        let provider = OverpassProvider::new().with_user_agent(user_agent);
+        assert_eq!(provider.user_agent, user_agent);
+    }
+
+    #[test]
+    fn test_build_overpass_query() {
+        let provider = OverpassProvider::new();
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        let config = OsmConfigBuilder::new()
+            .features(FeatureSet::urban())
+            .build();
+
+        let query = provider.build_overpass_query(&bbox, &config);
+
+        // Should contain basic structure
+        assert!(query.contains("[out:json]"));
+        assert!(query.contains("[timeout:"));
+        assert!(query.contains("52,13,53,14")); // bbox coordinates
+        assert!(query.contains("out geom"));
+
+        // Should contain feature queries
+        assert!(query.contains("way[\"highway\"]"));
+        assert!(query.contains("way[\"building\"]"));
+        assert!(query.contains("way[\"leisure\"]"));
+        assert!(query.contains("way[\"natural\"]"));
+    }
+
+    #[test]
+    fn test_build_overpass_query_with_custom_features() {
+        let provider = OverpassProvider::new();
+        let bbox = BoundingBox::new(52.0, 13.0, 53.0, 14.0);
+        let config = OsmConfigBuilder::new()
+            .features(
+                FeatureSet::new()
+                    .with_feature(OsmFeature::Buildings)
+                    .with_feature(OsmFeature::Railways),
+            )
+            .build();
+
+        let query = provider.build_overpass_query(&bbox, &config);
+
+        // Should contain building queries
+        assert!(query.contains("way[\"building\"]"));
+        assert!(query.contains("relation[\"building\"]")); // Buildings use relations
+
+        // Should contain railway queries
+        assert!(query.contains("way[\"railway\"]"));
+
+        // Should not contain roads (not in feature set)
+        assert!(!query.contains("way[\"highway\"]"));
+    }
+
+    #[test]
+    fn test_should_include_relations() {
+        let provider = OverpassProvider::new();
+
+        // These should include relations
+        assert!(provider.should_include_relations("building"));
+        assert!(provider.should_include_relations("natural"));
+        assert!(provider.should_include_relations("landuse"));
+        assert!(provider.should_include_relations("leisure"));
+        assert!(provider.should_include_relations("boundary"));
+        assert!(provider.should_include_relations("waterway"));
+
+        // These should not
+        assert!(!provider.should_include_relations("highway"));
+        assert!(!provider.should_include_relations("amenity"));
+        assert!(!provider.should_include_relations("unknown"));
+    }
+
+    #[test]
+    fn test_should_include_nodes() {
+        let provider = OverpassProvider::new();
+
+        // These should include nodes
+        assert!(provider.should_include_nodes("amenity"));
+        assert!(provider.should_include_nodes("tourism"));
+        assert!(provider.should_include_nodes("power"));
+
+        // These should not
+        assert!(!provider.should_include_nodes("building"));
+        assert!(!provider.should_include_nodes("highway"));
+        assert!(!provider.should_include_nodes("unknown"));
+    }
+
+    #[test]
+    fn test_radius_to_bbox() {
+        let center_lat = 52.5;
+        let center_lon = 13.4;
+        let radius_km = 10.0;
+
+        let bbox = OverpassProvider::radius_to_bbox(center_lat, center_lon, radius_km);
+
+        // Center should be preserved (approximately)
+        let center = bbox.center();
+        assert!((center.0 - center_lat).abs() < 0.01);
+        assert!((center.1 - center_lon).abs() < 0.01);
+
+        // Bounding box should be reasonable size
+        assert!(bbox.height() > 0.1); // At least 0.1 degrees
+        assert!(bbox.width() > 0.1);
+        assert!(bbox.height() < 0.5); // Less than 0.5 degrees
+        assert!(bbox.width() < 0.5);
+
+        // Should contain the center point
+        assert!(bbox.contains(center_lat, center_lon));
+    }
+
+    #[test]
+    fn test_parse_element_count() {
+        // Valid JSON with elements
+        let json_with_elements = r#"{"elements": [{"type": "node"}, {"type": "way"}]}"#;
+        assert_eq!(
+            OverpassProvider::parse_element_count(json_with_elements),
+            Some(2)
+        );
+
+        // Empty elements array
+        let json_empty = r#"{"elements": []}"#;
+        assert_eq!(OverpassProvider::parse_element_count(json_empty), Some(0));
+
+        // No elements field
+        let json_no_elements = r#"{"version": 0.6}"#;
+        assert_eq!(
+            OverpassProvider::parse_element_count(json_no_elements),
+            None
+        );
+
+        // Invalid JSON
+        let invalid_json = "not json";
+        assert_eq!(OverpassProvider::parse_element_count(invalid_json), None);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_region_bounding_box() {
+        let provider = OverpassProvider::new();
+        let region = Region::bbox(52.0, 13.0, 53.0, 14.0);
+
+        let result = provider.resolve_region(&region).await.unwrap();
+        assert_eq!(result.south, 52.0);
+        assert_eq!(result.west, 13.0);
+        assert_eq!(result.north, 53.0);
+        assert_eq!(result.east, 14.0);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_region_center_radius() {
+        let provider = OverpassProvider::new();
+        let region = Region::center_radius(52.5, 13.4, 5.0);
+
+        let result = provider.resolve_region(&region).await.unwrap();
+
+        // Should contain the center point
+        assert!(result.contains(52.5, 13.4));
+
+        // Should be a reasonable size for 5km radius
+        assert!(result.height() > 0.05); // At least 0.05 degrees
+        assert!(result.width() > 0.05);
+        assert!(result.height() < 0.2); // Less than 0.2 degrees
+        assert!(result.width() < 0.2);
+    }
+
+    // Note: We can't easily test the actual network calls without mocking
+    // or using integration tests, but we can test the error handling logic
+
+    #[test]
+    fn test_area_validation() {
+        // This would be tested in the fetch_data method
+        // Large areas should be rejected or warned about
+        let large_bbox = BoundingBox::new(50.0, 10.0, 55.0, 15.0); // ~500km x 500km
+        let area = large_bbox.area_km2();
+        assert!(area > 5000.0); // Should trigger our validation
+    }
+
+    #[test]
+    fn test_timeout_calculation() {
+        let provider = OverpassProvider::new();
+        let config = OsmConfigBuilder::new().timeout(120).build();
+        let bbox = BoundingBox::new(52.0, 13.0, 52.1, 13.1);
+
+        let query = provider.build_overpass_query(&bbox, &config);
+        assert!(query.contains("[timeout:120]"));
+
+        // Test custom timeout override
+        let provider_with_timeout = OverpassProvider::new().with_timeout(Duration::from_secs(90));
+        let query = provider_with_timeout.build_overpass_query(&bbox, &config);
+        assert!(query.contains("[timeout:90]"));
+    }
+}

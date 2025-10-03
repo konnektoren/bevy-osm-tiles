@@ -247,3 +247,155 @@ impl Default for MockProvider {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::NetworkError;
+    use crate::{FeatureSet, OsmConfigBuilder, OsmDataFormat};
+
+    #[tokio::test]
+    async fn test_mock_provider_basic() {
+        let provider = MockProvider::new();
+        assert_eq!(provider.provider_type(), "mock");
+
+        let capabilities = provider.capabilities();
+        assert!(!capabilities.supports_real_time);
+        assert!(!capabilities.requires_network);
+        assert!(capabilities.supports_geocoding);
+        assert!(capabilities.wasm_compatible);
+        assert!(capabilities.max_area_km2.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_with_custom_data() {
+        let custom_data = r#"{"elements": [{"type": "node", "id": 1, "lat": 50.0, "lon": 8.0}]}"#;
+        let provider = MockProvider::with_data(custom_data);
+
+        let config = OsmConfigBuilder::new().city("test").build();
+
+        let result = provider.fetch_data(&config).await.unwrap();
+        assert_eq!(result.raw_data, custom_data);
+        assert_eq!(result.format, OsmDataFormat::Json);
+        assert_eq!(result.metadata.provider_type, "mock");
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_with_failure() {
+        let provider = MockProvider::new().with_failure();
+
+        let config = OsmConfigBuilder::new().city("test").build();
+
+        let result = provider.fetch_data(&config).await;
+        assert!(result.is_err());
+
+        if let Err(OsmTilesError::Network(NetworkError::Connection { message })) = result {
+            assert_eq!(message, "Simulated network failure");
+        } else {
+            panic!("Expected NetworkError::Connection");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_region_resolution() {
+        let provider = MockProvider::new();
+
+        // Test bounding box region
+        let bbox_region = Region::bbox(52.0, 13.0, 53.0, 14.0);
+        let result = provider.resolve_region(&bbox_region).await.unwrap();
+        assert_eq!(result.south, 52.0);
+        assert_eq!(result.west, 13.0);
+        assert_eq!(result.north, 53.0);
+        assert_eq!(result.east, 14.0);
+
+        // Test center radius region
+        let center_region = Region::center_radius(52.5, 13.4, 5.0);
+        let result = provider.resolve_region(&center_region).await.unwrap();
+        assert!(result.contains(52.5, 13.4)); // Should contain center point
+
+        // Test known cities
+        let berlin_region = Region::city("berlin");
+        let result = provider.resolve_region(&berlin_region).await.unwrap();
+        assert!(result.contains(52.5, 13.4)); // Berlin coordinates
+
+        let munich_region = Region::city("munich");
+        let result = provider.resolve_region(&munich_region).await.unwrap();
+        assert!(result.contains(48.1, 11.5)); // Munich coordinates
+
+        // Test unknown city
+        let unknown_region = Region::city("unknown_city");
+        let result = provider.resolve_region(&unknown_region).await;
+        assert!(result.is_err());
+
+        if let Err(OsmTilesError::Geographic(msg)) = result {
+            assert!(msg.contains("Mock provider doesn't know city"));
+        } else {
+            panic!("Expected Geographic error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_test_availability() {
+        // Normal provider should be available
+        let provider = MockProvider::new();
+        assert!(provider.test_availability().await.is_ok());
+
+        // Provider with failure should not be available
+        let failing_provider = MockProvider::new().with_failure();
+        let result = failing_provider.test_availability().await;
+        assert!(result.is_err());
+
+        if let Err(OsmTilesError::Geographic(msg)) = result {
+            assert_eq!(msg, "Mock failure enabled");
+        } else {
+            panic!("Expected Geographic error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_metadata() {
+        let provider = MockProvider::new();
+        let config = OsmConfigBuilder::new()
+            .city("test")
+            .features(FeatureSet::urban())
+            .build();
+
+        let result = provider.fetch_data(&config).await.unwrap();
+        let metadata = result.metadata;
+
+        assert_eq!(metadata.provider_type, "mock");
+        assert_eq!(metadata.source, "mock-provider");
+        assert_eq!(metadata.element_count, Some(4));
+        assert!(metadata.processing_time_ms.is_some());
+        assert_eq!(metadata.extra.get("simulated"), Some(&"true".to_string()));
+        assert_eq!(
+            metadata.extra.get("wasm_compatible"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(metadata.extra.get("test_data"), Some(&"true".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_mock_provider_default_test_data() {
+        let provider = MockProvider::new();
+        let config = OsmConfigBuilder::new().city("test").build();
+
+        let result = provider.fetch_data(&config).await.unwrap();
+
+        // Verify the data is valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&result.raw_data).unwrap();
+        assert!(parsed.get("elements").is_some());
+
+        // Should have the expected test elements
+        let elements = parsed["elements"].as_array().unwrap();
+        assert_eq!(elements.len(), 4);
+
+        // Check for expected element types
+        let element_types: Vec<&str> = elements
+            .iter()
+            .filter_map(|e| e.get("type").and_then(|t| t.as_str()))
+            .collect();
+        assert!(element_types.contains(&"way"));
+        assert!(element_types.contains(&"node"));
+    }
+}
