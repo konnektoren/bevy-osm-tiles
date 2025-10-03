@@ -1,14 +1,13 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! A Rust library for downloading OpenStreetMap data and converting it to grid-based tile maps.
+//!
+//! This library provides a trait-based architecture for fetching OSM data and generating
+//! grid representations suitable for games and visualizations. The core library is
+//! WASM-compatible and has optional Bevy integration.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod config;
+pub mod download;
+pub mod error;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use config::*;
+pub use download::*;
+pub use error::*;
