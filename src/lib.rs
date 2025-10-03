@@ -5,9 +5,9 @@
 //! WASM-compatible and has optional Bevy integration.
 
 pub mod config;
-pub mod download;
 pub mod error;
+pub mod provider;
 
 pub use config::*;
-pub use download::*;
 pub use error::*;
+pub use provider::*;
