@@ -4,6 +4,8 @@
 //! grid representations suitable for games and visualizations. The core library is
 //! WASM-compatible and has optional Bevy integration.
 
+#[cfg(feature = "bevy")]
+pub mod bevy_plugin;
 pub mod config;
 pub mod error;
 pub mod generator;
