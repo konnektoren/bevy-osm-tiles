@@ -9,9 +9,11 @@ pub mod bevy_plugin;
 pub mod config;
 pub mod error;
 pub mod generator;
+pub mod http;
 pub mod provider;
 
 pub use config::*;
 pub use error::*;
 pub use generator::*;
+pub use http::*;
 pub use provider::*;
