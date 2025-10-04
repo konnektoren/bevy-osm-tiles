@@ -28,6 +28,11 @@ name = "cli_city_loader"
 path = "examples/cli_city_loader.rs"
 required-features = ["cli"]
 
+[[example]]
+name = "city_loader_3d"
+path = "examples/city_loader_3d.rs"
+required-features = ["bevy", "cli"]
+
 [features]
 default = []
 bevy = ["dep:bevy"]
