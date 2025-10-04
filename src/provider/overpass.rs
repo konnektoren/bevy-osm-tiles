@@ -17,17 +17,27 @@ pub struct OverpassProvider {
 }
 
 impl OverpassProvider {
-    /// Create a new Overpass API provider with default reqwest client
+    /// Create a new Overpass API provider with default client
     pub fn new() -> Self {
         Self::with_base_url("https://overpass-api.de/api/interpreter")
     }
 
     /// Create a new provider with a custom Overpass API endpoint
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        let config = HttpConfig::default();
-        let http_client = Arc::new(
-            crate::http::ReqwestClient::with_config(config).expect("Failed to create HTTP client"),
-        );
+        let http_client = crate::http::create_default_client()
+            .expect("Failed to create HTTP client - check that either 'reqwest-client' or 'ehttp-client' feature is enabled");
+
+        Self {
+            base_url: base_url.into(),
+            http_client,
+            custom_timeout: None,
+        }
+    }
+
+    /// Create a new provider with custom configuration
+    pub fn with_config(base_url: impl Into<String>, config: HttpConfig) -> Self {
+        let http_client = crate::http::create_client_with_config(config)
+            .expect("Failed to create HTTP client with config");
 
         Self {
             base_url: base_url.into(),
@@ -45,11 +55,38 @@ impl OverpassProvider {
         }
     }
 
+    /// Create a provider optimized for WASM environments
+    #[cfg(feature = "ehttp-client")]
+    pub fn for_wasm() -> Self {
+        let config = HttpConfig::default();
+        let http_client = Arc::new(crate::http::EhttpClient::with_config(config));
+
+        Self {
+            base_url: "https://overpass-api.de/api/interpreter".to_string(),
+            http_client,
+            custom_timeout: None,
+        }
+    }
+
+    /// Create a provider optimized for native environments
+    #[cfg(feature = "reqwest-client")]
+    pub fn for_native() -> Self {
+        let config = HttpConfig::default();
+        let http_client = Arc::new(
+            crate::http::ReqwestClient::with_config(config)
+                .expect("Failed to create reqwest client"),
+        );
+
+        Self {
+            base_url: "https://overpass-api.de/api/interpreter".to_string(),
+            http_client,
+            custom_timeout: None,
+        }
+    }
+
     /// Set a custom timeout for requests
     pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.custom_timeout = Some(timeout);
-        // Note: We can't easily reconfigure the client here without reconstruction
-        // This would be handled in the HTTP client configuration
         self
     }
 

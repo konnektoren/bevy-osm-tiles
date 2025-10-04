@@ -6,7 +6,7 @@ use std::time::Duration;
 pub type HttpResult<T> = Result<T, HttpError>;
 
 /// HTTP client errors
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum HttpError {
     #[error("Request failed: {message}")]
     RequestFailed { message: String },
