@@ -37,7 +37,7 @@ path = "examples/city_loader_3d.rs"
 required-features = ["bevy", "cli"]
 
 [features]
-default = ["bevy"]
+default = []
 bevy = ["dep:bevy", "ehttp-client"]
 cli = []
 
