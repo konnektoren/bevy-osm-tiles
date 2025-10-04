@@ -3,14 +3,11 @@ use clap::Parser;
 use tracing::{error, info, warn};
 use tracing_subscriber;
 
-use bevy_osm_tiles::{
-    DefaultGridGenerator, FeatureSet, GridGenerator, OsmConfigBuilder, OsmDataProvider, OsmFeature,
-    ProviderFactory, TileGrid, TileType,
-};
+use bevy_osm_tiles::{FeatureSet, OsmFeature, TileType, bevy_plugin::*};
 
 #[derive(Parser)]
-#[command(name = "osm-3d-city-loader")]
-#[command(about = "Load OpenStreetMap data for a city and display it as a 3D visualization")]
+#[command(name = "osm-3d-city-loader-plugin")]
+#[command(about = "Load OpenStreetMap data using the plugin and display as 3D visualization")]
 struct Args {
     /// City name to load OSM data for
     #[arg(short, long)]
@@ -28,63 +25,43 @@ struct Args {
     #[arg(short, long, default_value = "100")]
     grid_resolution: u32,
 
-    /// Skip grid generation (only fetch OSM data)
-    #[arg(long)]
-    skip_grid: bool,
-
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
 
-    /// Test connection only
-    #[arg(short, long)]
-    test: bool,
+    /// Use mock provider for testing
+    #[arg(long)]
+    mock: bool,
 
     /// Simulate network delay (for mock provider, in milliseconds)
     #[arg(long)]
     delay: Option<u64>,
-
-    /// Show detailed grid statistics
-    #[arg(long)]
-    grid_stats: bool,
 }
 
-/// Configuration for loading city data
+/// Configuration for the app
 #[derive(Resource, Clone, Debug)]
-pub struct CityLoadConfig {
+pub struct AppConfig {
     pub city: String,
     pub features: String,
     pub provider: String,
     pub grid_resolution: u32,
     pub delay: Option<u64>,
     pub verbose: bool,
-    pub timeout: u32,
 }
 
-impl Default for CityLoadConfig {
-    fn default() -> Self {
-        Self {
-            city: String::new(),
-            features: "urban".to_string(),
-            provider: "mock".to_string(),
-            grid_resolution: 100,
-            delay: None,
-            verbose: false,
-            timeout: 60,
-        }
-    }
-}
-
-impl From<&Args> for CityLoadConfig {
+impl From<&Args> for AppConfig {
     fn from(args: &Args) -> Self {
         Self {
             city: args.city.clone(),
             features: args.features.clone(),
-            provider: args.provider.clone(),
+            provider: if args.mock {
+                "mock".to_string()
+            } else {
+                args.provider.clone()
+            },
             grid_resolution: args.grid_resolution,
             delay: args.delay,
             verbose: args.verbose,
-            timeout: 60,
         }
     }
 }
@@ -92,7 +69,7 @@ impl From<&Args> for CityLoadConfig {
 fn main() {
     let args = Args::parse();
 
-    // Initialize tracing only if not already initialized
+    // Initialize tracing
     if tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_max_level(if args.verbose {
@@ -107,97 +84,69 @@ fn main() {
         // Tracing already initialized, that's fine
     }
 
-    // Handle test-only mode
-    if args.test {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async {
-            let config = CityLoadConfig::from(&args);
-            test_provider_availability(config).await
-        });
-        match result {
-            Ok(()) => {
-                info!("✅ Provider is available!");
-                return;
-            }
-            Err(e) => {
-                error!("❌ Provider test failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // Skip grid generation mode
-    if args.skip_grid {
-        info!("⏭️  Skipping grid generation");
-        return;
-    }
-
-    info!("🌍 Loading 3D city map for: {}", args.city);
+    info!("🌍 Starting 3D city map loader for: {}", args.city);
     info!("🎯 Feature preset: {}", args.features);
-    info!("🔌 Provider: {}", args.provider);
+    info!(
+        "🔌 Provider: {}",
+        if args.mock {
+            "mock"
+        } else {
+            args.provider.as_str()
+        }
+    );
     info!("🔢 Grid resolution: {} cells/degree", args.grid_resolution);
 
-    // Pre-load the data before starting Bevy to avoid Tokio runtime issues
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let grid_result = rt.block_on(async {
-        let config = CityLoadConfig::from(&args);
-        load_city_data(config).await
-    });
+    let config = AppConfig::from(&args);
 
-    match grid_result {
-        Ok(grid) => {
-            // Show statistics
-            show_grid_stats(&grid);
-
-            // Start Bevy with pre-loaded grid
-            App::new()
-                .add_plugins(
-                    DefaultPlugins
-                        .set(WindowPlugin {
-                            primary_window: Some(Window {
-                                title: format!("3D City Map: {}", args.city),
-                                resolution: (1280, 720).into(),
-                                ..default()
-                            }),
-                            ..default()
-                        })
-                        .set(bevy::log::LogPlugin {
-                            level: bevy::log::Level::WARN, // Reduce Bevy's logging to avoid conflicts
-                            ..default()
-                        }),
-                )
-                .add_systems(Startup, setup)
-                .add_systems(Update, update_camera)
-                .insert_resource(LoadedGrid(grid))
-                .insert_resource(CityLoadConfig::from(&args))
-                .run();
-        }
-        Err(e) => {
-            error!("❌ Failed to load city data: {}", e);
-            std::process::exit(1);
-        }
-    }
+    App::new()
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: format!("3D City Map: {}", args.city),
+                        resolution: (1280, 720).into(),
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(bevy::log::LogPlugin {
+                    level: bevy::log::Level::WARN, // Reduce Bevy's logging to avoid conflicts
+                    ..default()
+                }),
+        )
+        // Add the OSM tiles plugin
+        .add_plugins(if args.mock || args.provider == "mock" {
+            OsmTilesPlugin::new().with_mock_provider()
+        } else {
+            OsmTilesPlugin::new().with_overpass_provider()
+        })
+        .insert_resource(config)
+        .add_systems(Startup, (setup, request_map_load.after(setup)))
+        .add_systems(
+            Update,
+            (
+                handle_map_loaded,
+                handle_map_failed,
+                update_camera,
+                update_loading_ui,
+            ),
+        )
+        .run();
 }
-
-#[derive(Resource)]
-struct LoadedGrid(TileGrid);
 
 #[derive(Component)]
-struct MapTile {
-    tile_type: TileType,
-    grid_pos: (usize, usize),
-}
+struct MapContainer;
 
 #[derive(Component)]
 struct CameraController;
 
-fn setup(
-    mut commands: Commands,
-    config: Res<CityLoadConfig>,
-    grid: Res<LoadedGrid>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+#[derive(Component)]
+struct LoadingText;
+
+#[derive(Component)]
+struct StatusText;
+
+fn setup(mut commands: Commands) {
     // Create camera
     commands.spawn((
         Camera3d::default(),
@@ -215,9 +164,17 @@ fn setup(
         Transform::from_xyz(10.0, 20.0, 10.0),
     ));
 
-    // Create UI
+    // Create map container entity
     commands.spawn((
-        Text::new(format!("3D City Map: {}", config.city)),
+        Transform::default(),
+        Visibility::default(),
+        MapContainer,
+        Name::new("MapContainer"),
+    ));
+
+    // Create loading UI
+    commands.spawn((
+        Text::new("Loading map data..."),
         Node {
             position_type: PositionType::Absolute,
             top: px(20.0),
@@ -225,18 +182,12 @@ fn setup(
             ..default()
         },
         TextColor(Color::srgb(1.0, 1.0, 1.0)),
+        LoadingText,
     ));
 
-    // Create status text
-    let (width, height) = grid.0.dimensions();
+    // Create status text (initially empty)
     commands.spawn((
-        Text::new(format!(
-            "Grid: {}x{} tiles | Objects: {} | Coverage: {:.1}%",
-            width,
-            height,
-            grid.0.tile_count(),
-            grid.0.statistics().coverage_ratio * 100.0
-        )),
+        Text::new(""),
         Node {
             position_type: PositionType::Absolute,
             top: px(50.0),
@@ -244,6 +195,7 @@ fn setup(
             ..default()
         },
         TextColor(Color::srgb(0.8, 0.8, 0.8)),
+        StatusText,
     ));
 
     // Create controls text
@@ -257,57 +209,22 @@ fn setup(
         },
         TextColor(Color::srgb(0.6, 0.6, 0.6)),
     ));
-
-    // Render the 3D map immediately
-    render_3d_map(&mut commands, &grid.0, &mut meshes, &mut materials);
 }
 
-/// Load city data and return the generated grid
-pub async fn load_city_data(config: CityLoadConfig) -> Result<TileGrid, String> {
-    if config.verbose {
-        info!("🌍 Loading city data for: {}", config.city);
-        info!("🎯 Feature preset: {}", config.features);
-        info!("🔌 Provider: {}", config.provider);
-        info!(
-            "🔢 Grid resolution: {} cells/degree",
-            config.grid_resolution
-        );
-    }
-
-    // Create the appropriate provider
-    let provider: Box<dyn OsmDataProvider> = match config.provider.as_str() {
-        "overpass" => Box::new(ProviderFactory::overpass()),
-        "mock" => {
-            if let Some(delay_ms) = config.delay {
-                Box::new(ProviderFactory::mock_with_delay(delay_ms))
-            } else {
-                Box::new(ProviderFactory::mock())
-            }
-        }
-        _ => {
-            let available = ProviderFactory::available_providers();
-            error!(
-                "Unknown provider: {}. Available providers: {:?}",
-                config.provider, available
-            );
-            return Err("Invalid provider".to_string());
+fn request_map_load(
+    config: Res<AppConfig>,
+    mut load_writer: MessageWriter<LoadMapMessage>,
+    map_container: Query<Entity, With<MapContainer>>,
+) {
+    let container_entity = match map_container.single() {
+        Ok(entity) => entity,
+        Err(_) => {
+            error!("Expected exactly one MapContainer entity");
+            return;
         }
     };
 
-    // Show provider capabilities if verbose
-    if config.verbose {
-        let capabilities = provider.capabilities();
-        info!("🔧 Provider capabilities:");
-        info!("  - Real-time data: {}", capabilities.supports_real_time);
-        info!("  - Requires network: {}", capabilities.requires_network);
-        info!(
-            "  - Supports geocoding: {}",
-            capabilities.supports_geocoding
-        );
-        info!("  - WASM compatible: {}", capabilities.wasm_compatible);
-    }
-
-    // Create configuration with selected feature preset
+    // Parse feature preset
     let feature_set = match config.features.as_str() {
         "urban" => FeatureSet::urban(),
         "transportation" => FeatureSet::transportation(),
@@ -325,90 +242,104 @@ pub async fn load_city_data(config: CityLoadConfig) -> Result<TileGrid, String> 
         }
     };
 
-    let osm_config = OsmConfigBuilder::new()
-        .city(&config.city)
-        .features(feature_set)
-        .grid_resolution(config.grid_resolution)
-        .timeout(config.timeout.into())
-        .build();
+    // Create load request
+    let mut request = MapLoadRequest::new(&config.city)
+        .with_features(feature_set)
+        .with_resolution(config.grid_resolution)
+        .for_entity(container_entity);
 
-    if config.verbose {
-        info!("⚙️  Configuration created successfully");
+    if config.provider != "overpass" {
+        request = request.with_provider(&config.provider);
+    }
+
+    // Send the load request
+    load_writer.load_map_with_request(request);
+
+    info!("📨 Sent map load request for: {}", config.city);
+}
+
+fn handle_map_loaded(
+    mut loaded_reader: MessageReader<MapLoadedMessage>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut loading_text: Query<&mut Text, (With<LoadingText>, Without<StatusText>)>,
+    mut status_text: Query<&mut Text, (With<StatusText>, Without<LoadingText>)>,
+    config: Res<AppConfig>,
+) {
+    for message in loaded_reader.read() {
         info!(
-            "📊 Features included: {:?}",
-            osm_config.features.features().iter().collect::<Vec<_>>()
+            "🎉 Map loaded for {}: {}x{} grid",
+            message.request.city_name,
+            message.grid.dimensions().0,
+            message.grid.dimensions().1
         );
-    }
 
-    // Resolve the region
-    if config.verbose {
-        info!("🗺️  Resolving region...");
-    }
-    let _bbox = match provider.resolve_region(&osm_config.region).await {
-        Ok(bbox) => {
-            if config.verbose {
-                info!("📍 Resolved to bounding box: {:?}", bbox);
-                info!("📐 Approximate area: {:.2} km²", bbox.area_km2());
-            }
-            bbox
+        // Update UI
+        if let Ok(mut text) = loading_text.single_mut() {
+            **text = format!("3D City Map: {}", config.city);
         }
-        Err(e) => {
-            error!("❌ Failed to resolve region: {}", e);
-            return Err(e.to_string());
-        }
-    };
 
-    // Fetch OSM data
-    if config.verbose {
-        info!("⬇️  Fetching OSM data...");
-    }
-    let osm_data = match provider.fetch_data(&osm_config).await {
-        Ok(osm_data) => {
-            if config.verbose {
-                info!("✅ Successfully fetched OSM data!");
-                info!(
-                    "📝 Data size: {} bytes ({:.1} KB)",
-                    osm_data.raw_data.len(),
-                    osm_data.raw_data.len() as f64 / 1024.0
-                );
-            }
-            osm_data
+        let (width, height) = message.grid.dimensions();
+        if let Ok(mut text) = status_text.single_mut() {
+            **text = format!(
+                "Grid: {}x{} tiles | Objects: {} | Coverage: {:.1}%",
+                width,
+                height,
+                message.grid.tile_count(),
+                message.grid.statistics().coverage_ratio * 100.0
+            );
         }
-        Err(e) => {
-            error!("❌ Failed to fetch OSM data: {}", e);
-            return Err(e.to_string());
-        }
-    };
 
-    // Generate grid
-    if config.verbose {
-        info!("🔲 Generating tile grid...");
-    }
+        // Show grid statistics
+        show_grid_stats(&message.grid);
 
-    let generator = DefaultGridGenerator::new();
-    match generator.generate_grid(&osm_data, &osm_config).await {
-        Ok(grid) => {
-            if config.verbose {
-                info!("✅ Grid generation completed!");
-                let (width, height) = grid.dimensions();
-                info!(
-                    "📐 Grid dimensions: {}x{} ({} total tiles)",
-                    width,
-                    height,
-                    grid.tile_count()
-                );
-            }
-            Ok(grid)
-        }
-        Err(e) => {
-            error!("❌ Failed to generate grid: {}", e);
-            Err(e.to_string())
+        // Spawn 3D visualization
+        render_3d_map(&mut commands, &message.grid, &mut meshes, &mut materials);
+    }
+}
+
+fn handle_map_failed(
+    mut failed_reader: MessageReader<MapLoadFailedMessage>,
+    mut loading_text: Query<&mut Text, With<LoadingText>>,
+) {
+    for message in failed_reader.read() {
+        error!(
+            "❌ Failed to load map for {}: {}",
+            message.request.city_name, message.error
+        );
+
+        // Update UI to show error
+        if let Ok(mut text) = loading_text.single_mut() {
+            **text = format!("❌ Failed to load map: {}", message.error);
         }
     }
 }
 
-/// Show detailed grid statistics
-pub fn show_grid_stats(grid: &TileGrid) {
+fn update_loading_ui(
+    mut progress_reader: MessageReader<MapLoadProgressMessage>,
+    mut loading_text: Query<&mut Text, With<LoadingText>>,
+) {
+    for message in progress_reader.read() {
+        if let Ok(mut text) = loading_text.single_mut() {
+            let stage_text = match message.stage {
+                LoadingStage::ResolvingCity => "Resolving city location...",
+                LoadingStage::FetchingData => "Fetching OSM data...",
+                LoadingStage::GeneratingGrid => "Generating grid...",
+                LoadingStage::Complete => "Complete!",
+            };
+
+            **text = format!(
+                "Loading {}: {} ({:.0}%)",
+                message.request.city_name,
+                stage_text,
+                message.progress * 100.0
+            );
+        }
+    }
+}
+
+fn show_grid_stats(grid: &bevy_osm_tiles::TileGrid) {
     let stats = grid.statistics();
     info!("🎨 Tile type distribution:");
     let mut type_counts: Vec<_> = stats.tile_type_counts.iter().collect();
@@ -431,23 +362,9 @@ pub fn show_grid_stats(grid: &TileGrid) {
     }
 }
 
-async fn test_provider_availability(config: CityLoadConfig) -> Result<(), String> {
-    let provider: Box<dyn OsmDataProvider> = match config.provider.as_str() {
-        "overpass" => Box::new(ProviderFactory::overpass()),
-        "mock" => Box::new(ProviderFactory::mock()),
-        _ => return Err("Invalid provider".to_string()),
-    };
-
-    info!("🔍 Testing provider availability...");
-    provider
-        .test_availability()
-        .await
-        .map_err(|e| e.to_string())
-}
-
 fn render_3d_map(
     commands: &mut Commands,
-    grid: &TileGrid,
+    grid: &bevy_osm_tiles::TileGrid,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
@@ -576,6 +493,12 @@ fn update_camera(
             }
         }
     }
+}
+
+#[derive(Component)]
+struct MapTile {
+    tile_type: TileType,
+    grid_pos: (usize, usize),
 }
 
 // Helper function for converting pixels to Val
