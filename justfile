@@ -45,6 +45,10 @@ natural city=default_city:
 comprehensive city=default_city:
     cargo run --example cli_city_loader --features cli,reqwest-client -- --city "{{city}}" --features comprehensive --grid-resolution 3000 --output {{city}}_comprehensive.png
 
+# Interactive example - no CLI args needed
+interactive:
+    cargo run --example interactive_city_loader --features=bevy,ehttp-client
+
 # Test with different HTTP clients
 test-ehttp city=default_city:
     cargo run --example city_loader_3d --no-default-features --features=bevy,cli,ehttp-client -- --city "{{city}}" --grid-resolution 1000
