@@ -1,11 +1,14 @@
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing_subscriber;
 
 use bevy_osm_tiles::{FeatureSet, OsmFeature, TileType, bevy_plugin::*};
 
 fn main() {
     // Initialize tracing
+
+    #[cfg(not(target_arch = "wasm32"))]
     if tracing::subscriber::set_global_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)

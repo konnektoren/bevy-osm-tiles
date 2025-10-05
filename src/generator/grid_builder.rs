@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 use super::{
@@ -287,6 +288,7 @@ impl Default for DefaultGridGenerator {
 #[async_trait]
 impl GridGenerator for DefaultGridGenerator {
     async fn generate_grid(&self, osm_data: &OsmData, config: &OsmConfig) -> Result<TileGrid> {
+        #[cfg(not(target_arch = "wasm32"))]
         let start_time = Instant::now();
 
         tracing::info!("Generating grid from OSM data");
@@ -323,7 +325,16 @@ impl GridGenerator for DefaultGridGenerator {
             total_tiles_updated += tiles_updated;
         }
 
-        let generation_time = start_time.elapsed().as_millis() as u64;
+        let generation_time = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                start_time.elapsed().as_millis() as u64
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                1u64 // Default value for WASM
+            }
+        };
 
         // Update grid metadata
         grid.metadata.elements_processed = elements.len() as u32;
@@ -340,11 +351,20 @@ impl GridGenerator for DefaultGridGenerator {
             .extra
             .insert("meters_per_tile".to_string(), meters_per_tile.to_string());
 
+        // Conditional logging
+        #[cfg(not(target_arch = "wasm32"))]
         tracing::info!(
             "Grid generation complete: {}/{} tiles populated in {:.1}s",
             total_tiles_updated,
             grid_width * grid_height,
             generation_time as f64 / 1000.0
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        tracing::info!(
+            "Grid generation complete: {}/{} tiles populated",
+            total_tiles_updated,
+            grid_width * grid_height,
         );
 
         Ok(grid)

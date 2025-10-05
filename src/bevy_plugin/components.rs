@@ -7,6 +7,7 @@ use bevy::{ecs::world::CommandQueue, prelude::*, tasks::Task};
 pub struct MapTiles {
     pub grid: TileGrid,
     pub request: MapLoadRequest,
+    #[cfg(not(target_arch = "wasm32"))]
     pub loaded_at: std::time::Instant,
 }
 
@@ -16,6 +17,7 @@ pub struct MapLoading {
     pub request: MapLoadRequest,
     pub stage: LoadingStage,
     pub progress: f32,
+    #[cfg(not(target_arch = "wasm32"))]
     pub started_at: std::time::Instant,
 }
 
@@ -24,5 +26,6 @@ pub struct MapLoading {
 pub struct LoadingTask {
     pub request: MapLoadRequest,
     pub task: Task<CommandQueue>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub started_at: std::time::Instant,
 }

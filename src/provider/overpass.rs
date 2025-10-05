@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use geo::{Destination, Haversine, Point};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 use super::{OsmData, OsmDataProvider, ProviderCapabilities};
@@ -13,7 +14,7 @@ use crate::{
 pub struct OverpassProvider {
     pub base_url: String,
     http_client: Arc<dyn HttpClient>,
-    custom_timeout: Option<std::time::Duration>,
+    custom_timeout: Option<u64>, // Changed from Duration to u64
 }
 
 impl OverpassProvider {
@@ -85,8 +86,8 @@ impl OverpassProvider {
     }
 
     /// Set a custom timeout for requests
-    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.custom_timeout = Some(timeout);
+    pub fn with_timeout_secs(mut self, timeout_seconds: u64) -> Self {
+        self.custom_timeout = Some(timeout_seconds);
         self
     }
 
@@ -94,11 +95,7 @@ impl OverpassProvider {
     fn build_overpass_query(&self, bbox: &BoundingBox, config: &OsmConfig) -> String {
         let bbox_str = format!("{},{},{},{}", bbox.south, bbox.west, bbox.north, bbox.east);
 
-        let timeout = self
-            .custom_timeout
-            .or_else(|| Some(std::time::Duration::from_secs(config.timeout_seconds)))
-            .unwrap()
-            .as_secs();
+        let timeout = self.custom_timeout.unwrap_or(config.timeout_seconds);
 
         let mut query = format!("[out:json][timeout:{}];\n(\n", timeout);
 
@@ -190,6 +187,8 @@ impl OsmDataProvider for OverpassProvider {
     }
 
     async fn fetch_data(&self, config: &OsmConfig) -> Result<OsmData> {
+        // Conditional timing for non-WASM targets
+        #[cfg(not(target_arch = "wasm32"))]
         let start_time = Instant::now();
 
         tracing::info!(
@@ -234,7 +233,19 @@ impl OsmDataProvider for OverpassProvider {
         }
 
         let raw_data = response.body;
-        let processing_time = start_time.elapsed().as_millis() as u64;
+
+        // Calculate processing time conditionally
+        let processing_time = {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                start_time.elapsed().as_millis() as u64
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                1u64 // Default value for WASM
+            }
+        };
+
         let element_count = Self::parse_element_count(&raw_data);
 
         let mut metadata = OsmMetadata::new(&self.base_url, self.provider_type())
@@ -253,11 +264,20 @@ impl OsmDataProvider for OverpassProvider {
             )
             .with_extra("http_client", "trait_based");
 
+        // Conditional logging with timing info
+        #[cfg(not(target_arch = "wasm32"))]
         tracing::info!(
             "Successfully fetched OSM data: {} elements, {:.2} KB, {:.1}s",
             element_count.unwrap_or(0),
             raw_data.len() as f64 / 1024.0,
             processing_time as f64 / 1000.0
+        );
+
+        #[cfg(target_arch = "wasm32")]
+        tracing::info!(
+            "Successfully fetched OSM data: {} elements, {:.2} KB",
+            element_count.unwrap_or(0),
+            raw_data.len() as f64 / 1024.0,
         );
 
         Ok(OsmData {
@@ -392,7 +412,6 @@ impl Default for OverpassProvider {
 mod tests {
     use super::*;
     use crate::{FeatureSet, OsmConfigBuilder, OsmFeature};
-    use std::time::Duration;
 
     #[test]
     fn test_overpass_provider_basic() {
@@ -414,13 +433,6 @@ mod tests {
         let custom_url = "https://lz4.overpass-api.de/api/interpreter";
         let provider = OverpassProvider::with_base_url(custom_url);
         assert_eq!(provider.base_url, custom_url);
-    }
-
-    #[test]
-    fn test_overpass_provider_with_timeout() {
-        let timeout = Duration::from_secs(120);
-        let provider = OverpassProvider::new().with_timeout(timeout);
-        assert_eq!(provider.custom_timeout, Some(timeout));
     }
 
     #[test]
@@ -603,7 +615,7 @@ mod tests {
         assert!(query.contains("[timeout:120]"));
 
         // Test custom timeout override
-        let provider_with_timeout = OverpassProvider::new().with_timeout(Duration::from_secs(90));
+        let provider_with_timeout = OverpassProvider::new().with_timeout_secs(90);
         let query = provider_with_timeout.build_overpass_query(&bbox, &config);
         assert!(query.contains("[timeout:90]"));
     }

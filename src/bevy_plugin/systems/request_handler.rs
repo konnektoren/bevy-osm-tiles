@@ -17,6 +17,7 @@ pub fn handle_load_requests(
                 request: request.clone(),
                 stage: LoadingStage::ResolvingCity,
                 progress: 0.0,
+                #[cfg(not(target_arch = "wasm32"))]
                 started_at: std::time::Instant::now(),
             });
         }

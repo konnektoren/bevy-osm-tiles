@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::time::Duration;
 
 use super::{OsmData, OsmDataProvider, ProviderCapabilities};
 use crate::{BoundingBox, OsmConfig, OsmDataFormat, OsmMetadata, OsmTilesError, Region, Result};
@@ -11,8 +10,6 @@ use crate::{BoundingBox, OsmConfig, OsmDataFormat, OsmMetadata, OsmTilesError, R
 pub struct MockProvider {
     /// Predefined data to return
     mock_data: String,
-    /// Simulated delay for network requests
-    simulated_delay: Option<Duration>,
     /// Whether to simulate failures
     simulate_failure: bool,
 }
@@ -27,15 +24,8 @@ impl MockProvider {
     pub fn with_data(data: impl Into<String>) -> Self {
         Self {
             mock_data: data.into(),
-            simulated_delay: None,
             simulate_failure: false,
         }
-    }
-
-    /// Add a simulated network delay (useful for testing loading states)
-    pub fn with_delay(mut self, delay: Duration) -> Self {
-        self.simulated_delay = Some(delay);
-        self
     }
 
     /// Configure the provider to simulate failures
@@ -119,11 +109,6 @@ impl OsmDataProvider for MockProvider {
     }
 
     async fn fetch_data(&self, config: &OsmConfig) -> Result<OsmData> {
-        // Simulate network delay if configured
-        if let Some(delay) = self.simulated_delay {
-            tracing::debug!("Simulating network delay: {:?}", delay);
-        }
-
         // Simulate failure if configured
         if self.simulate_failure {
             return Err(OsmTilesError::Network(crate::NetworkError::Connection {
@@ -135,11 +120,7 @@ impl OsmDataProvider for MockProvider {
 
         let metadata = OsmMetadata::new("mock-provider", self.provider_type())
             .with_element_count(4) // Matches the default test data
-            .with_processing_time(
-                self.simulated_delay
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(1),
-            )
+            .with_processing_time(1)
             .with_extra("simulated", "true")
             .with_extra("wasm_compatible", "true")
             .with_extra("test_data", "true");

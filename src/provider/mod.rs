@@ -175,11 +175,6 @@ impl ProviderFactory {
         MockProvider::with_data(data)
     }
 
-    /// Create a mock provider that simulates network conditions
-    pub fn mock_with_delay(delay_ms: u64) -> MockProvider {
-        MockProvider::new().with_delay(std::time::Duration::from_millis(delay_ms))
-    }
-
     /// Get a list of all available provider types
     pub fn available_providers() -> Vec<&'static str> {
         vec!["overpass", "mock"]
@@ -276,13 +271,6 @@ mod tests {
         // We can't easily test the internal data without accessing private fields,
         // but we can verify it was created
         assert_eq!(provider.provider_type(), "mock");
-    }
-
-    #[test]
-    fn test_provider_factory_create_mock_with_delay() {
-        let provider = ProviderFactory::mock_with_delay(1000);
-        assert_eq!(provider.provider_type(), "mock");
-        // The delay is internal, but we know it was set
     }
 
     #[test]

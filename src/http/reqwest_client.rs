@@ -15,8 +15,14 @@ impl ReqwestClient {
 
     /// Create a new reqwest client with custom configuration
     pub fn with_config(config: HttpConfig) -> HttpResult<Self> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let timeout = std::time::Duration::from_secs(config.timeout_seconds);
+
+        #[cfg(target_arch = "wasm32")]
+        let timeout = 30;
+
         let mut builder = reqwest::Client::builder()
-            .timeout(config.timeout)
+            .timeout(timeout)
             .user_agent(&config.user_agent);
 
         // Add default headers
@@ -50,8 +56,7 @@ impl ReqwestClient {
     /// Convert reqwest error to our error type
     fn convert_error(err: reqwest::Error) -> HttpError {
         if err.is_timeout() {
-            // Try to extract actual timeout from error, fallback to default
-            HttpError::Timeout { seconds: 60 }
+            HttpError::Timeout { seconds: 60 } // Default fallback
         } else if err.is_connect() {
             HttpError::Network {
                 message: format!("Connection failed: {}", err),

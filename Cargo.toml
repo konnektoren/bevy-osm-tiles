@@ -61,5 +61,5 @@ reqwest-client = ["dep:reqwest"]
 ehttp-client = ["dep:ehttp"]
 
 # Convenience features for specific use cases
-wasm = ["ehttp-client"]  # WASM environments prefer ehttp
+wasm = ["ehttp-client", "bevy/web"]  # WASM environments prefer ehttp
 native = ["reqwest-client"]  # Native environments prefer reqwest

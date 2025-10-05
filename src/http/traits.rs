@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::time::Duration;
 
 /// Result type for HTTP operations
 pub type HttpResult<T> = Result<T, HttpError>;
@@ -48,7 +47,7 @@ pub trait HttpClient: Send + Sync {
 /// Configuration for HTTP clients
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
-    pub timeout: Duration,
+    pub timeout_seconds: u64,
     pub user_agent: String,
     pub default_headers: HashMap<String, String>,
 }
@@ -56,7 +55,7 @@ pub struct HttpConfig {
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(60),
+            timeout_seconds: 60,
             user_agent: format!("bevy-osm-tiles/{}", env!("CARGO_PKG_VERSION")),
             default_headers: HashMap::new(),
         }
@@ -68,8 +67,8 @@ impl HttpConfig {
         Self::default()
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+    pub fn with_timeout_secs(mut self, seconds: u64) -> Self {
+        self.timeout_seconds = seconds;
         self
     }
 

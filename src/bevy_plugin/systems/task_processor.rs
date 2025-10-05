@@ -76,6 +76,7 @@ pub fn process_loading_tasks(
                                         .insert(MapTiles {
                                             grid,
                                             request: request_clone,
+                                            #[cfg(not(target_arch = "wasm32"))]
                                             loaded_at: std::time::Instant::now(),
                                         });
                                 }
@@ -104,6 +105,7 @@ pub fn process_loading_tasks(
                 .spawn(LoadingTask {
                     request: request.clone(),
                     task,
+                    #[cfg(not(target_arch = "wasm32"))]
                     started_at: std::time::Instant::now(),
                 })
                 .id();

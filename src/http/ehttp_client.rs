@@ -3,10 +3,11 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+// Only import time-related modules for non-WASM targets
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
 /// HTTP client using ehttp for WASM and native compatibility
-///
-/// ehttp is a lightweight HTTP client that works well in both WASM and native environments
-/// without requiring tokio, making it ideal for Bevy applications.
 pub struct EhttpClient {
     config: HttpConfig,
 }
@@ -35,9 +36,8 @@ impl EhttpClient {
 
     /// Convert ehttp error to our error type
     fn convert_error(error: String) -> HttpError {
-        // ehttp returns string errors, so we need to parse them
         if error.contains("timeout") || error.contains("Timeout") {
-            HttpError::Timeout { seconds: 60 } // Default timeout
+            HttpError::Timeout { seconds: 60 }
         } else if error.contains("connection") || error.contains("Connection") {
             HttpError::Network { message: error }
         } else {
@@ -49,13 +49,11 @@ impl EhttpClient {
     fn convert_response(response: ehttp::Response) -> HttpResult<HttpResponse> {
         let status = response.status as u16;
 
-        // Convert ehttp::Headers to HashMap<String, String>
         let mut headers = HashMap::new();
         for (key, value) in response.headers {
             headers.insert(key, value);
         }
 
-        // Convert body bytes to string
         let body = String::from_utf8(response.bytes).map_err(|e| HttpError::RequestFailed {
             message: format!("Failed to decode response body as UTF-8: {}", e),
         })?;
@@ -71,15 +69,12 @@ impl EhttpClient {
     fn build_headers(&self, additional_headers: Option<HashMap<String, String>>) -> ehttp::Headers {
         let mut headers = ehttp::Headers::default();
 
-        // Add default headers from config
         for (key, value) in &self.config.default_headers {
             headers.insert(key.clone(), value.clone());
         }
 
-        // Add user agent
         headers.insert("User-Agent".to_string(), self.config.user_agent.clone());
 
-        // Add any additional headers
         if let Some(additional) = additional_headers {
             for (key, value) in additional {
                 headers.insert(key, value);
@@ -102,12 +97,12 @@ impl EhttpClient {
             url: url.to_string(),
             headers,
             body,
+            #[cfg(target_arch = "wasm32")]
             mode: ehttp::Mode::NoCors,
         };
 
         tracing::debug!("{} {} ({} bytes)", method, url, request.body.len());
 
-        // Use shared state to track the request completion
         let state = Arc::new(Mutex::new(RequestState {
             result: None,
             completed: false,
@@ -115,7 +110,6 @@ impl EhttpClient {
 
         let state_for_callback = state.clone();
 
-        // Execute the request
         ehttp::fetch(request, move |response| {
             let result = match response {
                 Ok(response) => Self::convert_response(response),
@@ -127,38 +121,51 @@ impl EhttpClient {
             guard.completed = true;
         });
 
-        // Poll for completion (non-blocking async polling)
-        let start_time = std::time::Instant::now();
-        let timeout = self.config.timeout;
+        // Platform-specific polling
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let start_time = Instant::now();
+            let timeout = std::time::Duration::from_secs(self.config.timeout_seconds);
 
-        loop {
-            // Check if request is complete
-            {
-                let guard = state.lock().unwrap();
-                if guard.completed {
-                    // Take the result instead of cloning it
-                    return guard.result.as_ref().unwrap().clone();
+            loop {
+                {
+                    let guard = state.lock().unwrap();
+                    if guard.completed {
+                        return guard.result.as_ref().unwrap().clone();
+                    }
                 }
-            }
 
-            // Check for timeout
-            if start_time.elapsed() > timeout {
-                return Err(HttpError::Timeout {
-                    seconds: timeout.as_secs(),
-                });
-            }
+                if start_time.elapsed() > timeout {
+                    return Err(HttpError::Timeout {
+                        seconds: self.config.timeout_seconds,
+                    });
+                }
 
-            // Yield control to allow other tasks to run
-            #[cfg(not(target_arch = "wasm32"))]
-            {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
+        }
 
-            #[cfg(target_arch = "wasm32")]
-            {
-                // On WASM, we can't use std::thread::sleep
-                // The browser's event loop will handle the yielding
-                // We just need to not busy-wait too aggressively
+        #[cfg(target_arch = "wasm32")]
+        {
+            let timeout_seconds = self.config.timeout_seconds;
+            let mut poll_count = 0;
+            const MAX_POLLS: u32 = 100000;
+
+            loop {
+                {
+                    let guard = state.lock().unwrap();
+                    if guard.completed {
+                        return guard.result.as_ref().unwrap().clone();
+                    }
+                }
+
+                poll_count += 1;
+
+                if poll_count > MAX_POLLS {
+                    return Err(HttpError::Timeout {
+                        seconds: timeout_seconds,
+                    });
+                }
             }
         }
     }
@@ -172,7 +179,6 @@ impl HttpClient for EhttpClient {
     }
 
     async fn post_form(&self, url: &str, form_data: &[(&str, &str)]) -> HttpResult<HttpResponse> {
-        // Build form-encoded body - fix the borrowing issue
         let mut body_parts = Vec::new();
         for (i, (key, value)) in form_data.iter().enumerate() {
             if i > 0 {
@@ -185,7 +191,6 @@ impl HttpClient for EhttpClient {
         let body_string = body_parts.join("");
         let body = body_string.into_bytes();
 
-        // Set content type header
         let mut additional_headers = HashMap::new();
         additional_headers.insert(
             "Content-Type".to_string(),
@@ -199,7 +204,6 @@ impl HttpClient for EhttpClient {
     async fn post_json(&self, url: &str, json: &str) -> HttpResult<HttpResponse> {
         let body = json.as_bytes().to_vec();
 
-        // Set content type header
         let mut additional_headers = HashMap::new();
         additional_headers.insert("Content-Type".to_string(), "application/json".to_string());
 
@@ -232,6 +236,9 @@ impl Default for EhttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Only import Duration for non-WASM tests
+    #[cfg(not(target_arch = "wasm32"))]
     use std::time::Duration;
 
     #[test]
@@ -241,9 +248,15 @@ mod tests {
             client.config().user_agent,
             format!("bevy-osm-tiles/{}", env!("CARGO_PKG_VERSION"))
         );
+
+        #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(client.config().timeout, Duration::from_secs(60));
+
+        #[cfg(target_arch = "wasm32")]
+        assert_eq!(client.config().timeout_seconds, 60);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_ehttp_client_with_config() {
         let config = HttpConfig::new()
@@ -253,6 +266,23 @@ mod tests {
 
         let client = EhttpClient::with_config(config);
         assert_eq!(client.config().timeout, Duration::from_secs(30));
+        assert_eq!(client.config().user_agent, "test-agent");
+        assert_eq!(
+            client.config().default_headers.get("X-Test"),
+            Some(&"value".to_string())
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn test_ehttp_client_with_config() {
+        let config = HttpConfig::new()
+            .with_timeout_secs(30)
+            .with_user_agent("test-agent")
+            .with_header("X-Test", "value");
+
+        let client = EhttpClient::with_config(config);
+        assert_eq!(client.config().timeout_seconds, 30);
         assert_eq!(client.config().user_agent, "test-agent");
         assert_eq!(
             client.config().default_headers.get("X-Test"),

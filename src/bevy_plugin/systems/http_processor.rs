@@ -31,6 +31,7 @@ pub fn process_http_loading_state(
                             .insert(MapTiles {
                                 grid,
                                 request,
+                                #[cfg(not(target_arch = "wasm32"))]
                                 loaded_at: std::time::Instant::now(),
                             });
                     }
