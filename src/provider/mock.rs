@@ -122,28 +122,6 @@ impl OsmDataProvider for MockProvider {
         // Simulate network delay if configured
         if let Some(delay) = self.simulated_delay {
             tracing::debug!("Simulating network delay: {:?}", delay);
-
-            // Use platform-appropriate sleep
-            #[cfg(target_arch = "wasm32")]
-            {
-                // In WASM, we need to use a WASM-compatible sleep
-                let mut cb = |resolve: js_sys::Function, _reject: js_sys::Function| {
-                    web_sys::window()
-                        .unwrap()
-                        .set_timeout_with_callback_and_timeout_and_arguments_0(
-                            &resolve,
-                            delay.as_millis() as i32,
-                        )
-                        .unwrap();
-                };
-                let promise = js_sys::Promise::new(&mut cb);
-                wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                //tokio::time::sleep(delay).await;
-            }
         }
 
         // Simulate failure if configured

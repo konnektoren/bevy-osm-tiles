@@ -3,3 +3,9 @@
 
 Cargo.lock
 /.idea
+
+# WASM build artifacts
+/dist/
+*.wasm
+pkg/
+wasm-pack.log

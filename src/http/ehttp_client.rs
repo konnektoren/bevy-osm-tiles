@@ -102,6 +102,7 @@ impl EhttpClient {
             url: url.to_string(),
             headers,
             body,
+            mode: ehttp::Mode::NoCors,
         };
 
         tracing::debug!("{} {} ({} bytes)", method, url, request.body.len());
